@@ -1,0 +1,14 @@
+{
+  "name": "@spark/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Framework-agnostic heart of Spark Notes: space access, markdown model, task index, plugin runtime.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@spark/plugin-sdk": "*"
+  }
+}

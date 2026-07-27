@@ -1,0 +1,12 @@
+export * from './ai.js';
+export * from './editor-bridge.js';
+export * from './events.js';
+export * from './markdown.js';
+export * from './plugins.js';
+export * from './registry.js';
+export * from './settings.js';
+export * from './space.js';
+export * from './sync.js';
+export * from './tasks.js';
+export * from './workspace.js';
+export type * from '@spark/plugin-sdk';

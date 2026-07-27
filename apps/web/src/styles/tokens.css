@@ -1,0 +1,237 @@
+/*
+ * Design tokens.
+ *
+ * One source of truth for colour, type and spacing. Both the React shell and
+ * the CodeMirror theme read these variables, so light/dark and any future theme
+ * is a matter of swapping values here — nothing else needs to know.
+ *
+ * The palette is warm and low-contrast on purpose: this is an app you look at
+ * for hours, and the page should read as paper rather than as a screen.
+ */
+
+@font-face {
+  font-family: 'iA Writer Quattro';
+  src: url('/fonts/iAWriterQuattroS-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'iA Writer Quattro';
+  src: url('/fonts/iAWriterQuattroS-Italic.woff2') format('woff2');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'iA Writer Quattro';
+  src: url('/fonts/iAWriterQuattroS-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'iA Writer Quattro';
+  src: url('/fonts/iAWriterQuattroS-BoldItalic.woff2') format('woff2');
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'iA Writer Mono';
+  src: url('/fonts/iAWriterMonoS-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'iA Writer Mono';
+  src: url('/fonts/iAWriterMonoS-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /* -- Type ------------------------------------------------------------- */
+  --font-editor: 'iA Writer Quattro', ui-sans-serif, -apple-system, 'Segoe UI', sans-serif;
+  --font-ui: 'iA Writer Quattro', ui-sans-serif, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'iA Writer Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --editor-font-size: 1.0625rem;
+  --editor-line-height: 1.65;
+  --editor-measure: 46rem;
+
+  /* -- Space ------------------------------------------------------------ */
+  --gutter: 1.5rem;
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 16px;
+
+  --header-height: 44px;
+  --statusbar-height: 26px;
+  --toolbar-height: 46px;
+
+  /* -- Motion ----------------------------------------------------------- */
+  --ease: cubic-bezier(0.2, 0.8, 0.3, 1);
+  --fast: 120ms;
+  --medium: 220ms;
+
+  /* -- Light palette ---------------------------------------------------- */
+  --bg: #fbfbfa;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-sunken: #f2f2ef;
+
+  --text: #1f1f1d;
+  --text-muted: #5c5c57;
+  --text-faint: #8f8f88;
+  --text-faintest: #b9b9b1;
+
+  --rule: #e6e5e0;
+  --rule-strong: #cfcec7;
+
+  --accent: #2f6df0;
+  --accent-soft: #e8effd;
+  --accent-faint: #b9cdfa;
+  --accent-contrast: #ffffff;
+
+  --selection: #cfe0ff;
+  --selection-match: #f3e6b8;
+  --highlight-bg: #fdf0b8;
+  --tag: #a4622a;
+
+  --code-bg: #f4f4f1;
+  --code-text: #2f2f2c;
+  --danger: #c0392b;
+  --success: #2b7a4b;
+
+  --syn-keyword: #8250c8;
+  --syn-string: #2b7a4b;
+  --syn-number: #b06000;
+  --syn-function: #2f6df0;
+  --syn-type: #0a7a86;
+  --syn-property: #a4622a;
+  --syn-operator: #5c5c57;
+
+  --shadow-sm: 0 1px 2px rgb(20 20 18 / 0.06);
+  --shadow-md: 0 8px 28px -8px rgb(20 20 18 / 0.18), 0 2px 6px rgb(20 20 18 / 0.06);
+  --shadow-lg: 0 24px 60px -16px rgb(20 20 18 / 0.28);
+}
+
+/* The system default follows the OS; the toggle stamps data-theme to override. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17171a;
+    --surface: #1d1d21;
+    --surface-raised: #24242a;
+    --surface-sunken: #131316;
+
+    --text: #e8e8e4;
+    --text-muted: #a5a5a0;
+    --text-faint: #74746f;
+    --text-faintest: #4f4f4b;
+
+    --rule: #2c2c32;
+    --rule-strong: #3d3d45;
+
+    --accent: #6f9bff;
+    --accent-soft: #23304d;
+    --accent-faint: #3c5488;
+    --accent-contrast: #11131a;
+
+    --selection: #2c3f66;
+    --selection-match: #4a4327;
+    --highlight-bg: #5a4f22;
+    --tag: #d99b63;
+
+    --code-bg: #202026;
+    --code-text: #d8d8d3;
+    --danger: #e57366;
+    --success: #6cc08b;
+
+    --syn-keyword: #c39bf0;
+    --syn-string: #8ed0a4;
+    --syn-number: #e0a86a;
+    --syn-function: #7fb0ff;
+    --syn-type: #6fd0da;
+    --syn-property: #d99b63;
+    --syn-operator: #a5a5a0;
+
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow-md: 0 8px 28px -8px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.3);
+    --shadow-lg: 0 24px 60px -16px rgb(0 0 0 / 0.7);
+  }
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #fbfbfa;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-sunken: #f2f2ef;
+  --text: #1f1f1d;
+  --text-muted: #5c5c57;
+  --text-faint: #8f8f88;
+  --text-faintest: #b9b9b1;
+  --rule: #e6e5e0;
+  --rule-strong: #cfcec7;
+  --accent: #2f6df0;
+  --accent-soft: #e8effd;
+  --accent-faint: #b9cdfa;
+  --accent-contrast: #ffffff;
+  --selection: #cfe0ff;
+  --selection-match: #f3e6b8;
+  --highlight-bg: #fdf0b8;
+  --tag: #a4622a;
+  --code-bg: #f4f4f1;
+  --code-text: #2f2f2c;
+  --danger: #c0392b;
+  --success: #2b7a4b;
+  --syn-keyword: #8250c8;
+  --syn-string: #2b7a4b;
+  --syn-number: #b06000;
+  --syn-function: #2f6df0;
+  --syn-type: #0a7a86;
+  --syn-property: #a4622a;
+  --syn-operator: #5c5c57;
+  --shadow-sm: 0 1px 2px rgb(20 20 18 / 0.06);
+  --shadow-md: 0 8px 28px -8px rgb(20 20 18 / 0.18), 0 2px 6px rgb(20 20 18 / 0.06);
+  --shadow-lg: 0 24px 60px -16px rgb(20 20 18 / 0.28);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #17171a;
+  --surface: #1d1d21;
+  --surface-raised: #24242a;
+  --surface-sunken: #131316;
+  --text: #e8e8e4;
+  --text-muted: #a5a5a0;
+  --text-faint: #74746f;
+  --text-faintest: #4f4f4b;
+  --rule: #2c2c32;
+  --rule-strong: #3d3d45;
+  --accent: #6f9bff;
+  --accent-soft: #23304d;
+  --accent-faint: #3c5488;
+  --accent-contrast: #11131a;
+  --selection: #2c3f66;
+  --selection-match: #4a4327;
+  --highlight-bg: #5a4f22;
+  --tag: #d99b63;
+  --code-bg: #202026;
+  --code-text: #d8d8d3;
+  --danger: #e57366;
+  --success: #6cc08b;
+  --syn-keyword: #c39bf0;
+  --syn-string: #8ed0a4;
+  --syn-number: #e0a86a;
+  --syn-function: #7fb0ff;
+  --syn-type: #6fd0da;
+  --syn-property: #d99b63;
+  --syn-operator: #a5a5a0;
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-md: 0 8px 28px -8px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.3);
+  --shadow-lg: 0 24px 60px -16px rgb(0 0 0 / 0.7);
+}

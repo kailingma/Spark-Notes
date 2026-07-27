@@ -1,0 +1,10 @@
+{
+  "name": "@spark/plugin-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Public types plugin authors write against. No runtime dependencies.",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}
