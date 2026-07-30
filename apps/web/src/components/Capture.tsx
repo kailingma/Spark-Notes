@@ -1,30 +1,40 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApp } from '../app-context';
 import { CAPTURE_MODES, appendCapture, dailyPageName, findMode } from '../lib/modes';
+import { writeCachedPage } from '../lib/page-cache';
 import { useVoiceCapture } from '../lib/voice';
+import { modKey, useIsNarrow } from '../lib/device';
 import { CloseIcon, MicIcon, SparkIcon, StopIcon } from './Icons';
 
 /**
- * Capture — what Spark opens to on a phone.
+ * Capture — the braindump box.
  *
- * The reason this exists: on a phone you are almost never arriving to *read*
- * your notes, you are arriving to get a thought out of your head before it's
- * gone. Landing in a file browser costs three taps and the thought. So the app
- * launches straight into a cursor, and the only decision on screen is a label.
+ * The reason this exists: you are often not arriving to *read* your notes, you
+ * are arriving to get a thought out of your head before it's gone. Landing in a
+ * file browser costs three taps and the thought. So there is one surface that
+ * is nothing but a cursor, and the only decision on it is a label.
+ *
+ * A phone opens straight into it and it fills the screen, because that is the
+ * whole session. On a desktop it is a card over whatever you were reading,
+ * reached by ⌘⇧C or the bolt in the header — the note behind it stays visible,
+ * and Escape puts you back on the line you were on.
  *
  * Everything captured lands in the day's page as ordinary markdown — the labels
  * are a shortcut for formatting, not a separate storage system.
  */
 export function Capture({ onClose }: { onClose: () => void }) {
-  const { workspace, toast, openPage, refreshPages } = useApp();
+  const { workspace, toast, openPage, refreshPages, preferences, setPreferences } = useApp();
 
   const [text, setText] = useState('');
-  const [modeId, setModeId] = useState(() => workspace.settings.get('app.captureMode', 'note'));
+  // The mode you last used is the mode you open in, and it is the same value
+  // the settings panel edits — one preference, not two places remembering it.
+  const [modeId, setModeId] = useState(preferences.captureMode);
   const [saving, setSaving] = useState(false);
   const [tidy, setTidy] = useState(false);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const mode = findMode(modeId);
+  const narrow = useIsNarrow();
 
   // Voice appends straight into the same box, so speaking and typing are the
   // same act — you can dictate a sentence and then fix a word by hand.
@@ -41,8 +51,8 @@ export function Capture({ onClose }: { onClose: () => void }) {
   }, []);
 
   useEffect(() => {
-    workspace.settings.set('app.captureMode', modeId);
-  }, [workspace, modeId]);
+    setPreferences({ captureMode: modeId });
+  }, [setPreferences, modeId]);
 
   useEffect(() => {
     if (voice.error) toast(voice.error, 'error');
@@ -92,8 +102,12 @@ export function Capture({ onClose }: { onClose: () => void }) {
         }
 
         const next = appendCapture(existing, block, new Date());
-        await workspace.space.write(page, next);
-        workspace.events.emit('page:save', { page, text: next });
+        const meta = await workspace.space.write(page, next);
+        // The revision travels with the event: an editor holding this page open
+        // behind the capture screen has to adopt it, or its next keystroke
+        // collides with the append that just happened.
+        writeCachedPage(page, next, meta.rev);
+        workspace.events.emit('page:save', { page, text: next, rev: meta.rev });
         await refreshPages();
 
         setText('');
@@ -122,82 +136,94 @@ export function Capture({ onClose }: { onClose: () => void }) {
   const preview = voice.interim ? `${text ? `${text} ` : ''}${voice.interim}` : text;
 
   return (
-    <div className="capture" role="dialog" aria-label="Quick capture">
-      <div className="capture-head">
-        <button className="icon-button" onClick={onClose} aria-label="Close capture">
-          <CloseIcon />
-        </button>
-        <div className="modes" role="group" aria-label="Capture mode">
-          {CAPTURE_MODES.map((option) => (
-            <button
-              key={option.id}
-              className="mode"
-              aria-pressed={option.id === modeId}
-              onClick={() => chooseMode(option.id)}
-            >
-              <span className="mode-glyph" aria-hidden="true">
-                {option.glyph}
-              </span>
-              {option.label}
-            </button>
-          ))}
-        </div>
-      </div>
+    <>
+      {/* Only a card has anything behind it to protect. On a phone the surface
+          is the screen, and a scrim under it would dim nothing. */}
+      {!narrow && <div className="capture-scrim" onMouseDown={onClose} />}
 
-      <div className="capture-body">
-        <textarea
-          ref={inputRef}
-          className="capture-input"
-          value={preview}
-          placeholder={mode.placeholder}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={onKeyDown}
-          // Interim speech is a preview of what the browser thinks it heard,
-          // not text yet — editing it would fight the recognizer.
-          readOnly={Boolean(voice.interim)}
-          autoCapitalize="sentences"
-          autoCorrect="on"
-          spellCheck
-          aria-label="What do you want to capture?"
-        />
-      </div>
-
-      <div className="capture-foot">
-        {voice.supported && (
-          <button
-            className="mic"
-            data-recording={voice.recording}
-            onClick={() => (voice.recording ? voice.stop() : voice.start())}
-            aria-label={voice.recording ? 'Stop recording' : 'Start voice capture'}
-            aria-pressed={voice.recording}
-          >
-            {voice.recording ? <StopIcon /> : <MicIcon />}
+      <div className="capture" role="dialog" aria-modal="true" aria-label="Quick capture">
+        <div className="capture-head">
+          <button className="icon-button" onClick={onClose} aria-label="Close capture">
+            <CloseIcon />
           </button>
-        )}
-
-        <div className="capture-hint">
-          {voice.recording ? (
-            'Listening — talk it through.'
-          ) : workspace.ai.available() && voice.transcript ? (
-            <label className="capture-tidy">
-              <input type="checkbox" checked={tidy} onChange={(e) => setTidy(e.target.checked)} />
-              <SparkIcon />
-              Tidy up
-            </label>
-          ) : (
-            `Goes to ${dailyPageName()}`
-          )}
+          <div className="modes" role="group" aria-label="Capture mode">
+            {CAPTURE_MODES.map((option) => (
+              <button
+                key={option.id}
+                className="mode"
+                aria-pressed={option.id === modeId}
+                onClick={() => chooseMode(option.id)}
+              >
+                <span className="mode-glyph" aria-hidden="true">
+                  {option.glyph}
+                </span>
+                {option.label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        <button
-          className="button"
-          data-variant="primary"
-          disabled={!text.trim() || saving}
-          onClick={() => void save(false)}
-        >
-          {saving ? 'Saving…' : 'Save'}
-        </button>
+        <div className="capture-body">
+          <textarea
+            ref={inputRef}
+            className="capture-input"
+            value={preview}
+            placeholder={mode.placeholder}
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={onKeyDown}
+            // Interim speech is a preview of what the browser thinks it heard,
+            // not text yet — editing it would fight the recognizer.
+            readOnly={Boolean(voice.interim)}
+            autoCapitalize="sentences"
+            autoCorrect="on"
+            spellCheck
+            aria-label="What do you want to capture?"
+          />
+        </div>
+
+        <div className="capture-foot">
+          {voice.supported && (
+            <button
+              className="mic"
+              data-recording={voice.recording}
+              onClick={() => (voice.recording ? voice.stop() : voice.start())}
+              aria-label={voice.recording ? 'Stop recording' : 'Start voice capture'}
+              aria-pressed={voice.recording}
+            >
+              {voice.recording ? <StopIcon /> : <MicIcon />}
+            </button>
+          )}
+
+          <div className="capture-hint">
+            {voice.recording ? (
+              'Listening — talk it through.'
+            ) : workspace.ai.available() && voice.transcript ? (
+              <label className="capture-tidy">
+                <input
+                  type="checkbox"
+                  checked={tidy}
+                  onChange={(e) => setTidy(e.target.checked)}
+                />
+                <SparkIcon />
+                Tidy up
+              </label>
+            ) : (
+              // The keys are only worth the line where there is a keyboard to
+              // press them on.
+              `Goes to ${dailyPageName()}${narrow ? '' : ` · ${modKey}↵ saves, Esc closes`}`
+            )}
+          </div>
+
+          <button
+            className="button"
+            data-variant="primary"
+            disabled={!text.trim() || saving}
+            onClick={() => void save(false)}
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
       </div>
-    </div>
+    </>
   );
 }

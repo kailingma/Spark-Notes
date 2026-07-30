@@ -52,15 +52,211 @@
   font-display: swap;
 }
 
+/*
+ * The switchable reading faces.
+ *
+ * A browser only downloads a face something on the page actually uses, so the
+ * two modes you are not in cost nothing — Fraunces in particular is a 350 kB
+ * variable font that is never fetched unless you are in serif mode.
+ */
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/Inter-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/Inter-Italic.woff2') format('woff2');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/Inter-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/Inter-BoldItalic.woff2') format('woff2');
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Source Serif 4';
+  src: url('/fonts/SourceSerif4-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Source Serif 4';
+  src: url('/fonts/SourceSerif4-Italic.woff2') format('woff2');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Source Serif 4';
+  src: url('/fonts/SourceSerif4-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Source Serif 4';
+  src: url('/fonts/SourceSerif4-BoldItalic.woff2') format('woff2');
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+
+/* One variable file covering the whole weight axis. */
+@font-face {
+  font-family: 'Fraunces';
+  src: url('/fonts/Fraunces.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/*
+ * The switchable interface faces.
+ *
+ * IBM Plex, which was drawn as a system family: it holds together in a 12px
+ * label, a button and a dense row, which is what the chrome is made of. The
+ * bold cut is SemiBold, declared across 600–700 so `<strong>` and a heading
+ * both land on it — Plex Bold is too much ink at interface sizes.
+ */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('/fonts/IBMPlexSans-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('/fonts/IBMPlexSans-Italic.woff2') format('woff2');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('/fonts/IBMPlexSans-SemiBold.woff2') format('woff2');
+  font-weight: 600 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('/fonts/IBMPlexSans-SemiBoldItalic.woff2') format('woff2');
+  font-weight: 600 700;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Serif';
+  src: url('/fonts/IBMPlexSerif-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IBM Plex Serif';
+  src: url('/fonts/IBMPlexSerif-Italic.woff2') format('woff2');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IBM Plex Serif';
+  src: url('/fonts/IBMPlexSerif-SemiBold.woff2') format('woff2');
+  font-weight: 600 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IBM Plex Serif';
+  src: url('/fonts/IBMPlexSerif-SemiBoldItalic.woff2') format('woff2');
+  font-weight: 600 700;
+  font-style: italic;
+  font-display: swap;
+}
+
 :root {
   /* -- Type ------------------------------------------------------------- */
-  --font-editor: 'iA Writer Quattro', ui-sans-serif, -apple-system, 'Segoe UI', sans-serif;
-  --font-ui: 'iA Writer Quattro', ui-sans-serif, -apple-system, 'Segoe UI', sans-serif;
+  --font-sans: 'Inter', 'iA Writer Quattro', ui-sans-serif, -apple-system, 'Segoe UI', sans-serif;
+  --font-serif: 'Source Serif 4', ui-serif, Georgia, 'Times New Roman', serif;
   --font-mono: 'iA Writer Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --font-display: 'Fraunces', 'Source Serif 4', ui-serif, Georgia, serif;
 
-  --editor-font-size: 1.0625rem;
+  /* The interface has its own two faces, drawn for chrome rather than prose. */
+  --font-ui-sans: 'IBM Plex Sans', ui-sans-serif, -apple-system, 'Segoe UI', sans-serif;
+  --font-ui-serif: 'IBM Plex Serif', ui-serif, Georgia, 'Times New Roman', serif;
+
+  /*
+   * Two independent choices. `data-font` on the root swaps the reading face —
+   * the document and nothing else — and `data-ui-font` swaps the face
+   * everything outside a document is set in. Code never joins either one:
+   * `--font-mono` is what a code fence, inline code and a table are set in
+   * regardless of the mode, because column alignment is part of what they mean.
+   *
+   * There is a fourth value for both, `curated`, which has no rule here on
+   * purpose: it means "ask the theme", and the answer is written straight onto
+   * `:root` by the generated stylesheet in `lib/theme.ts`. Everything below is
+   * therefore both the default and the fallback — a curated set that does not
+   * mention a role leaves that role exactly as it is here.
+   */
+  --font-editor: var(--font-sans);
+  --font-heading: var(--font-editor);
+
+  /*
+   * How a title behaves, as seven numbers.
+   *
+   * These exist so a font pack can make a heading *expressive* — heavier, wider,
+   * slanted, tracked in, set larger than the size in the stylesheet, or drawn
+   * with a variable font's own axes — without any of it being special-cased in
+   * the editor theme. The defaults are the app's own headings, so nothing here
+   * changes anything until something sets them.
+   *
+   * `--heading-scale` multiplies every heading size, which is how a display face
+   * gets the size it was drawn for while the body text stays put. Tracking is
+   * three variables because h1 and h2 are tracked tighter than the rest by
+   * default, and a pack that asks for one value means it for all of them.
+   */
+  --heading-weight: 700;
+  --heading-style: normal;
+  --heading-stretch: 100%;
+  --heading-scale: 1;
+  --heading-transform: none;
+  --heading-variation: normal;
+  --heading-tracking: normal;
+  --heading-tracking-1: -0.02em;
+  --heading-tracking-2: -0.015em;
+
+  --font-ui: var(--font-ui-sans);
+  --font-ui-heading: var(--font-ui);
+  --ui-heading-weight: 650;
+
+  /*
+   * Set in px rather than rem so the reading size stays exactly what the
+   * settings page says, independently of `--ui-font-size` (which is the root
+   * font size every other rem in the app follows, and would otherwise
+   * multiply into it).
+   */
+  --editor-font-size: 17px;
   --editor-line-height: 1.65;
   --editor-measure: 46rem;
+  --ui-font-size: 16px;
 
   /* -- Space ------------------------------------------------------------ */
   --gutter: 1.5rem;
@@ -100,9 +296,14 @@
   --selection-match: #f3e6b8;
   --highlight-bg: #fdf0b8;
   --tag: #a4622a;
+  --tag-soft: #f6ece1;
+  --search-match: #f3e6b8;
+  --search-match-active: #ffd77a;
 
   --code-bg: #f4f4f1;
   --code-text: #2f2f2c;
+  --code-inline-bg: #eeeeea;
+  --code-inline-border: #dededa;
   --danger: #c0392b;
   --success: #2b7a4b;
 
@@ -114,9 +315,49 @@
   --syn-property: #a4622a;
   --syn-operator: #5c5c57;
 
+  --scrollbar: #d3d2cb;
+  --scrollbar-hover: #b4b3aa;
+
   --shadow-sm: 0 1px 2px rgb(20 20 18 / 0.06);
   --shadow-md: 0 8px 28px -8px rgb(20 20 18 / 0.18), 0 2px 6px rgb(20 20 18 / 0.06);
   --shadow-lg: 0 24px 60px -16px rgb(20 20 18 / 0.28);
+}
+
+/*
+ * Reading modes.
+ *
+ * Serif gets a display face for titles: a serif body set larger is still body
+ * text, and a heading should announce itself. The other two modes set headings
+ * in the reading face, where weight and size are enough.
+ */
+:root[data-font='serif'] {
+  --font-editor: var(--font-serif);
+  --font-heading: var(--font-display);
+  /* Fraunces carries a lot of ink; 700 reads as shouting next to Source Serif. */
+  --heading-weight: 600;
+}
+
+:root[data-font='mono'] {
+  --font-editor: var(--font-mono);
+  --font-heading: var(--font-mono);
+}
+
+/*
+ * Interface modes.
+ *
+ * No display face here, in either mode: a settings heading or a panel title is
+ * a label, and a label that announces itself is a label competing with the
+ * thing it labels. Headings in the chrome are the interface face at weight,
+ * which is why `--font-ui-heading` follows `--font-ui` all the way down.
+ */
+:root[data-ui-font='serif'] {
+  --font-ui: var(--font-ui-serif);
+}
+
+:root[data-ui-font='mono'] {
+  --font-ui: var(--font-mono);
+  /* iA Writer Mono has no cut above bold, and 650 would round up to it anyway. */
+  --ui-heading-weight: 700;
 }
 
 /* The system default follows the OS; the toggle stamps data-theme to override. */
@@ -144,9 +385,14 @@
     --selection-match: #4a4327;
     --highlight-bg: #5a4f22;
     --tag: #d99b63;
+    --tag-soft: #3a2f24;
+    --search-match: #4a4327;
+    --search-match-active: #6d5e21;
 
     --code-bg: #202026;
     --code-text: #d8d8d3;
+    --code-inline-bg: #2a2a31;
+    --code-inline-border: #3a3a44;
     --danger: #e57366;
     --success: #6cc08b;
 
@@ -157,6 +403,9 @@
     --syn-type: #6fd0da;
     --syn-property: #d99b63;
     --syn-operator: #a5a5a0;
+
+    --scrollbar: #3a3a42;
+    --scrollbar-hover: #4e4e58;
 
     --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
     --shadow-md: 0 8px 28px -8px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.3);
@@ -184,8 +433,13 @@
   --selection-match: #f3e6b8;
   --highlight-bg: #fdf0b8;
   --tag: #a4622a;
+  --tag-soft: #f6ece1;
+  --search-match: #f3e6b8;
+  --search-match-active: #ffd77a;
   --code-bg: #f4f4f1;
   --code-text: #2f2f2c;
+  --code-inline-bg: #eeeeea;
+  --code-inline-border: #dededa;
   --danger: #c0392b;
   --success: #2b7a4b;
   --syn-keyword: #8250c8;
@@ -195,6 +449,8 @@
   --syn-type: #0a7a86;
   --syn-property: #a4622a;
   --syn-operator: #5c5c57;
+  --scrollbar: #d3d2cb;
+  --scrollbar-hover: #b4b3aa;
   --shadow-sm: 0 1px 2px rgb(20 20 18 / 0.06);
   --shadow-md: 0 8px 28px -8px rgb(20 20 18 / 0.18), 0 2px 6px rgb(20 20 18 / 0.06);
   --shadow-lg: 0 24px 60px -16px rgb(20 20 18 / 0.28);
@@ -220,8 +476,13 @@
   --selection-match: #4a4327;
   --highlight-bg: #5a4f22;
   --tag: #d99b63;
+  --tag-soft: #3a2f24;
+  --search-match: #4a4327;
+  --search-match-active: #6d5e21;
   --code-bg: #202026;
   --code-text: #d8d8d3;
+  --code-inline-bg: #2a2a31;
+  --code-inline-border: #3a3a44;
   --danger: #e57366;
   --success: #6cc08b;
   --syn-keyword: #c39bf0;
@@ -231,6 +492,8 @@
   --syn-type: #6fd0da;
   --syn-property: #d99b63;
   --syn-operator: #a5a5a0;
+  --scrollbar: #3a3a42;
+  --scrollbar-hover: #4e4e58;
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
   --shadow-md: 0 8px 28px -8px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.3);
   --shadow-lg: 0 24px 60px -16px rgb(0 0 0 / 0.7);

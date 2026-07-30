@@ -197,7 +197,20 @@ export const continueList: StateCommand = ({ state, dispatch }) => {
     handled = true;
 
     if (content.trim() === '') {
-      // Empty item: clear the line and stop the list.
+      // Enter on an empty item walks *out* one level at a time — nested list,
+      // parent list, then plain text. Collapsing straight to an empty line
+      // would throw away the nesting you just built with a single keystroke.
+      const indentWidth = indent.replace(/\t/g, '  ').length;
+      if (indentWidth > 0) {
+        const outdented = indent.replace(/\t/g, '  ').slice(2);
+        const rebuilt = `${outdented}${marker}${spacing}${task ? '[ ] ' : ''}`;
+        return {
+          changes: { from: line.from, to: line.to, insert: rebuilt },
+          range: EditorSelection.cursor(line.from + rebuilt.length),
+        };
+      }
+
+      // At the outer level there is nothing left to outdent to: end the list.
       return {
         changes: { from: line.from, to: line.to, insert: '' },
         range: EditorSelection.cursor(line.from),

@@ -1,78 +1,192 @@
+import {
+  Brain,
+  ChevronRight,
+  Code,
+  Columns2,
+  Columns3,
+  FileText,
+  Folder,
+  FolderPlus,
+  GraduationCap,
+  GripVertical,
+  History,
+  Info,
+  Keyboard,
+  List,
+  ListTree,
+  Maximize2,
+  Menu,
+  Mic,
+  Minimize2,
+  Minus,
+  Moon,
+  Paintbrush,
+  Palette,
+  PanelLeft,
+  PanelRight,
+  PanelRightClose,
+  PanelRightOpen,
+  Paperclip,
+  PenLine,
+  PictureInPicture2,
+  Plus,
+  Puzzle,
+  RefreshCw,
+  Search,
+  Send,
+  Settings,
+  ShieldCheck,
+  SlidersHorizontal,
+  Sparkles,
+  Square,
+  SquareCheck,
+  Sun,
+  SunMoon,
+  Tag,
+  Terminal,
+  TextQuote,
+  Trash2,
+  Type,
+  X,
+  Zap,
+  type LucideProps,
+} from 'lucide-react';
+
 /**
  * Icons.
  *
- * Hand-written strokes rather than an icon package: there are nine of them, and
- * inlining keeps the bundle honest and the weights consistent with the type.
- * All inherit `currentColor` and the stroke settings from `.icon-button svg`.
+ * Thin aliases over **lucide** rather than hand-drawn strokes. The set was
+ * drawn by hand once, and every icon added afterwards was a small act of
+ * matching a weight, a corner radius and an optical size by eye — which is a
+ * design job, done badly, in the middle of feature work. A library does it
+ * once and consistently, and lucide's 24×24 grid and stroke-first drawing are
+ * the system that was being approximated anyway.
+ *
+ * Everything is re-exported under the app's own names. That keeps the call
+ * sites reading as what they *mean* (`PageIcon`, `SparkIcon`) rather than what
+ * they happen to be drawn as, so swapping one glyph for a better match is a
+ * one-line change here and nowhere else.
+ *
+ * Stroke width, size and colour all come from `.icon-button svg` and its
+ * siblings in `app.css`. CSS beats an SVG presentation attribute, so lucide's
+ * own `stroke-width="2"` is overridden rather than fought with.
  */
 
-export const MenuIcon = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true">
-    <path d="M4 7h16M4 12h16M4 17h10" />
-  </svg>
-);
+/** Anything drawn in the chrome takes the same props lucide's own icons do. */
+type IconProps = LucideProps;
 
-export const SearchIcon = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true">
-    <circle cx="11" cy="11" r="6.5" />
-    <path d="m16 16 4 4" />
-  </svg>
-);
+export const MenuIcon = (props: IconProps) => <Menu {...props} />;
+export const SidebarOpenIcon = (props: IconProps) => <PanelRightOpen {...props} />;
+export const SidebarCloseIcon = (props: IconProps) => <PanelRightClose {...props} />;
+export const SearchIcon = (props: IconProps) => <Search {...props} />;
+export const PlusIcon = (props: IconProps) => <Plus {...props} />;
+export const TaskIcon = (props: IconProps) => <SquareCheck {...props} />;
+export const TagIcon = (props: IconProps) => <Tag {...props} />;
+export const MicIcon = (props: IconProps) => <Mic {...props} />;
+export const CloseIcon = (props: IconProps) => <X {...props} />;
+export const SunIcon = (props: IconProps) => <Sun {...props} />;
+export const MoonIcon = (props: IconProps) => <Moon {...props} />;
 
-export const PlusIcon = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true">
-    <path d="M12 5v14M5 12h14" />
-  </svg>
-);
+/**
+ * Following the system.
+ *
+ * A sun crossed with a crescent, rather than a monitor: the theme button cycles
+ * *this* dial — light, dark, or whatever the machine says — and a screen glyph
+ * would describe the device instead of the choice. It is also the one shape in
+ * the row that cannot be mistaken for a control of its own, which a rounded
+ * rectangle inside a rounded rectangle very much can.
+ */
+export const SystemThemeIcon = (props: IconProps) => <SunMoon {...props} />;
 
-export const TaskIcon = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true">
-    <rect x="4" y="4" width="16" height="16" rx="4" />
-    <path d="m8.5 12 2.5 2.5 4.5-5" />
-  </svg>
-);
+export const SparkIcon = (props: IconProps) => <Sparkles {...props} />;
 
-export const MicIcon = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true">
-    <rect x="9" y="3" width="6" height="11" rx="3" />
-    <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3" />
-  </svg>
-);
+/**
+ * Quick capture. A bolt rather than a pen: the box is about getting a thought
+ * out before it goes, and the pen already means "editing" in the settings rail.
+ */
+export const CaptureIcon = (props: IconProps) => <Zap {...props} />;
 
-export const StopIcon = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true">
-    <rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none" />
-  </svg>
-);
+/**
+ * Stop.
+ *
+ * Outlined rather than filled, because `fill` is set by the stylesheet for
+ * every icon in the chrome and a `fill` attribute here would lose to it. The
+ * square on its own is the universal symbol anyway, and the button it sits in
+ * is already red and pulsing while a recording is running.
+ */
+export const StopIcon = (props: IconProps) => <Square {...props} />;
 
-export const CloseIcon = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true">
-    <path d="M6 6l12 12M18 6L6 18" />
-  </svg>
-);
+/*
+ * The font switcher.
+ *
+ * Three faces, three glyphs about type rather than three renderings of the
+ * faces themselves: a letterform for sans, a quoted passage for serif — which
+ * is what a serif face is *for* — and a code bracket for mono.
+ *
+ * The fourth is not a face at all. Curated means "whatever this theme was
+ * designed to be read in", so it gets the palette — the glyph of *someone having
+ * chosen* — rather than a fourth letterform, which would imply a fourth font.
+ */
+export const SansIcon = (props: IconProps) => <Type {...props} />;
+export const SerifIcon = (props: IconProps) => <TextQuote {...props} />;
+export const MonoIcon = (props: IconProps) => <Code {...props} />;
+export const CuratedIcon = (props: IconProps) => <Palette {...props} />;
 
-export const SunIcon = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true">
-    <circle cx="12" cy="12" r="4" />
-    <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
-  </svg>
-);
+export const SettingsIcon = (props: IconProps) => <Settings {...props} />;
+export const SyncIcon = (props: IconProps) => <RefreshCw {...props} />;
 
-export const MoonIcon = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true">
-    <path d="M20 13.5A8 8 0 1 1 10.5 4a6.5 6.5 0 0 0 9.5 9.5Z" />
-  </svg>
-);
+/* The surfaces: a split, a window, and the states a window can be in. */
 
-export const SparkIcon = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true">
-    <path d="M12 3.5 13.8 9l5.7 1.8-5.7 1.8L12 18.3l-1.8-5.7L4.5 10.8 10.2 9 12 3.5Z" />
-  </svg>
-);
+export const SplitIcon = (props: IconProps) => <Columns2 {...props} />;
+export const FloatIcon = (props: IconProps) => <PictureInPicture2 {...props} />;
+export const MaximizeIcon = (props: IconProps) => <Maximize2 {...props} />;
+export const RestoreIcon = (props: IconProps) => <Minimize2 {...props} />;
+export const MinimizeIcon = (props: IconProps) => <Minus {...props} />;
+/** The handle you drag a tile by when it has no tab to grab. */
+export const GripIcon = (props: IconProps) => <GripVertical {...props} />;
+/** The right-hand rail, which is where Spark lives. */
+export const PanelIcon = (props: IconProps) => <PanelRight {...props} />;
 
-export const SyncIcon = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true">
-    <path d="M20 12a8 8 0 0 1-13.7 5.6M4 12a8 8 0 0 1 13.7-5.6" />
-    <path d="M4 20v-4h4M20 4v4h-4" />
-  </svg>
-);
+/*
+ * The navigator, and its three ways of showing the same space: a hierarchy, a
+ * flat list, and columns that walk into it one level at a time.
+ */
+
+export const NavigatorIcon = (props: IconProps) => <PanelLeft {...props} />;
+export const TreeIcon = (props: IconProps) => <ListTree {...props} />;
+export const ListIcon = (props: IconProps) => <List {...props} />;
+export const ColumnsIcon = (props: IconProps) => <Columns3 {...props} />;
+export const FolderIcon = (props: IconProps) => <Folder {...props} />;
+export const FolderPlusIcon = (props: IconProps) => <FolderPlus {...props} />;
+export const ChevronIcon = (props: IconProps) => <ChevronRight {...props} />;
+
+/**
+ * A page.
+ *
+ * `FileText` rather than a bare document outline: ruled lines are what makes a
+ * rectangle read as a sheet of paper with writing on it at 16px, and every row
+ * in the navigator is a page of prose.
+ */
+export const PageIcon = (props: IconProps) => <FileText {...props} />;
+
+/* Settings sections. Each is the thing it configures, not a generic gear. */
+
+export const GeneralIcon = (props: IconProps) => <SlidersHorizontal {...props} />;
+/** Appearance: a brush, because the tab is theme and type, not type alone. */
+export const AppearanceIcon = (props: IconProps) => <Paintbrush {...props} />;
+export const PenIcon = (props: IconProps) => <PenLine {...props} />;
+export const KeyboardIcon = (props: IconProps) => <Keyboard {...props} />;
+export const PluginIcon = (props: IconProps) => <Puzzle {...props} />;
+export const InfoIcon = (props: IconProps) => <Info {...props} />;
+export const ShieldIcon = (props: IconProps) => <ShieldCheck {...props} />;
+export const SendIcon = (props: IconProps) => <Send {...props} />;
+export const HistoryIcon = (props: IconProps) => <History {...props} />;
+export const TrashIcon = (props: IconProps) => <Trash2 {...props} />;
+
+/* Spark's longer reach: what it remembers, what it can be handed, what it runs. */
+
+/** Memory: a brain rather than a database, because the page is about knowing. */
+export const MemoryIcon = (props: IconProps) => <Brain {...props} />;
+export const AttachIcon = (props: IconProps) => <Paperclip {...props} />;
+export const SkillIcon = (props: IconProps) => <GraduationCap {...props} />;
+export const TerminalIcon = (props: IconProps) => <Terminal {...props} />;

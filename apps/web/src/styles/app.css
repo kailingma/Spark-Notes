@@ -16,6 +16,18 @@ body,
   height: 100%;
 }
 
+/*
+ * Interface text size.
+ *
+ * Everything in the chrome is sized in `rem`, so the root font size sets the
+ * whole interface in one move and keeps every proportion intact. The editor is
+ * deliberately left out — `--editor-font-size` is in px so the reading size
+ * stays exactly what the settings page says.
+ */
+html {
+  font-size: var(--ui-font-size);
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -44,6 +56,47 @@ button {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: 4px;
+}
+
+/*
+ * Scrollbars are part of the interface, not the browser's default furniture.
+ *
+ * The two mechanisms are mutually exclusive: once `scrollbar-width` is set,
+ * Chromium ignores the `::-webkit-scrollbar` pseudo-elements and falls back to
+ * the platform's overlay scrollbar — which is exactly the unstyled bar we're
+ * trying to replace. So the webkit rules stand alone, and the standard
+ * properties are scoped to engines that have no webkit pseudo-elements.
+ */
+@supports (-moz-appearance: none) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar) transparent;
+  }
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: 99px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-hover);
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -98,8 +151,9 @@ button {
 }
 
 .header-title {
-  flex: 1;
-  min-width: 0;
+  /* Sized to its content and centred by the flex spacers around it, so the
+     hover background hugs the name instead of spanning the whole bar. */
+  max-width: min(46ch, 50%);
   font-size: 0.8125rem;
   font-weight: 400;
   color: var(--text-faint);
@@ -107,10 +161,16 @@ button {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding: 0 0.5rem;
-  cursor: text;
+  padding: 0.15rem 0.5rem;
   border-radius: var(--radius-sm);
   -webkit-app-region: no-drag;
+  /* It renames on click; dragging across it should not select the label. */
+  user-select: none;
+}
+
+.header-spacer {
+  flex: 1;
+  min-width: 0;
 }
 
 .header-title:hover {
@@ -155,21 +215,738 @@ button {
   stroke-linejoin: round;
 }
 
-/* -- Sidebar --------------------------------------------------------------- */
+/* ---------------------------------------------------------------------------
+ * The workbench
+ *
+ * Docks around the outside, the tile tree in the middle, floating windows
+ * above. Geometry inside the tree is set inline from the layout state — the
+ * only inline styles in the app, because a pane's fraction of its split is a
+ * number the user just dragged and no class can carry it.
+ * ------------------------------------------------------------------------ */
 
-.sidebar {
-  width: 260px;
-  flex: none;
-  border-right: 1px solid var(--rule);
-  background: var(--surface-sunken);
+.workbench {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  position: relative;
+}
+
+/* Everything a modal sits on top of. `inert` handles the behaviour; this only
+   has to keep the layer laid out the way the workbench was. */
+.workbench-layer {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+.workbench-centre {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
+}
+
+.workbench-tiles {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+/* -- Splits ---------------------------------------------------------------- */
+
+.split {
+  position: absolute;
+  inset: 0;
+}
+
+.split-pane {
+  position: absolute;
   overflow: hidden;
 }
 
-.sidebar-search {
-  margin: 0.6rem;
-  padding: 0.45rem 0.65rem;
+.split-divider {
+  position: absolute;
+  z-index: 5;
+  background: transparent;
+  transition: background var(--fast) var(--ease);
+}
+
+.split-divider[data-axis='row'] {
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  margin-left: -4px;
+  cursor: col-resize;
+}
+
+.split-divider[data-axis='column'] {
+  left: 0;
+  right: 0;
+  height: 9px;
+  margin-top: -4px;
+  cursor: row-resize;
+}
+
+.split-divider:hover,
+.split-divider:active {
+  background: var(--accent-faint);
+}
+
+/* -- Tiles ----------------------------------------------------------------- */
+
+.tile {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-left: 1px solid var(--rule);
+  border-top: 1px solid var(--rule);
+  background: var(--bg);
+}
+
+.tile-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+/*
+ * The corner reservation.
+ *
+ * Both hover overlays — a panel's `.sidebar-actions` and a single-view tile's
+ * `.tile-actions` — are drawn over the top-right of whatever the view is
+ * showing, which is fine for a note and wrong for a view that puts its own
+ * buttons there: they end up stacked, and hovering one reveals the other on top
+ * of it. A view header reads `--corner-actions` and keeps that much of its
+ * right edge empty, so the overlay lands beside its buttons instead of over
+ * them. Only tiles that actually show the overlay declare it — with a tab strip
+ * the controls are in the strip and the corner is the view's own again.
+ */
+.tile:has(> .tile-actions) .tile-body {
+  --corner-actions: 7rem;
+}
+
+/*
+ * A single-view tile has no tab strip, so its controls live here: floated over
+ * the top-right corner, revealed on hover, and gone the moment a second view
+ * arrives and the real strip takes over.
+ */
+.tile-actions {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.4rem;
+  z-index: 4;
+  display: flex;
+  gap: 0.1rem;
+  padding: 0.1rem;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  transition: opacity var(--fast) var(--ease);
+}
+
+.tile:hover .tile-actions,
+.tile:focus-within .tile-actions {
+  opacity: 1;
+}
+
+.tile-actions .icon-button {
+  width: 24px;
+  height: 24px;
+}
+
+.tile-actions .icon-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.tile-grip {
+  cursor: grab;
+}
+
+.tile-grip:active {
+  cursor: grabbing;
+}
+
+/*
+ * Every tab stays mounted and hidden rather than unmounted: switching back to a
+ * note should not reload it, lose its scroll position, or throw away a reply
+ * Spark is halfway through writing.
+ */
+.tile-slot {
+  position: absolute;
+  inset: 0;
+  display: none;
+}
+
+.tile-slot[data-active='true'] {
+  display: block;
+}
+
+.tile-empty {
+  margin: 2rem;
+  color: var(--text-faintest);
+  font-size: 0.8125rem;
+}
+
+.page-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * The tile scrolls as one thing — document, then the links to it — so the
+ * scrollbar belongs to this column and CodeMirror grows to its content rather
+ * than scrolling inside itself.
+ */
+.page-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  position: relative;
+}
+
+.editor-host .cm-editor {
+  height: auto;
+}
+
+.editor-host .cm-scroller {
+  overflow: visible;
+}
+
+.plugin-view {
+  height: 100%;
+  overflow: auto;
+}
+
+/* -- Tabs ------------------------------------------------------------------ */
+
+.tabs {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  height: 32px;
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--rule);
+  /* The strip is a drop target for a dragged tab; nothing in it should start a
+     text selection on the way. */
+  user-select: none;
+}
+
+.tabs-scroll {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabs-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0 0.35rem 0 0.7rem;
+  max-width: 15rem;
+  font-size: 0.75rem;
+  color: var(--text-faint);
+  border-right: 1px solid var(--rule);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+
+.tab:hover {
+  color: var(--text-muted);
+  background: var(--surface);
+}
+
+.tab[data-active='true'] {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.tile[data-focused='true'] .tab[data-active='true'] {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-close {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  color: var(--text-faintest);
+  opacity: 0;
+  flex: none;
+}
+
+.tab:hover .tab-close,
+.tab[data-active='true'] .tab-close {
+  opacity: 1;
+}
+
+.tab-close:hover {
+  background: var(--rule);
+  color: var(--text);
+}
+
+.tab-close svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.tabs-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 0 0.2rem;
+  opacity: 0;
+  transition: opacity var(--fast) var(--ease);
+}
+
+.tabs:hover .tabs-actions,
+.tile[data-focused='true'] .tabs-actions {
+  opacity: 1;
+}
+
+.tabs-actions .icon-button {
+  width: 24px;
+  height: 24px;
+}
+
+.tabs-actions .icon-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* -- Docks ----------------------------------------------------------------- */
+
+.sidebar {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-sunken);
+  border-top: 1px solid var(--rule);
+  min-width: 0;
+}
+
+.sidebar[data-side='left'] {
+  border-right: 1px solid var(--rule);
+}
+
+.sidebar[data-side='right'] {
+  border-left: 1px solid var(--rule);
+}
+
+.sidebar[data-side='bottom'] {
+  border-top: 1px solid var(--rule);
+}
+
+.sidebar-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  /* Room for `.sidebar-actions`, which floats over this corner — see
+     `--corner-actions` where the panel headers read it. */
+  --corner-actions: 3.6rem;
+}
+
+.sidebar-tabs {
+  flex: none;
+  display: flex;
+  gap: 0.2rem;
+  padding: 0.35rem 0.4rem 0;
+}
+
+.sidebar-tab {
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.6875rem;
+  color: var(--text-faint);
+}
+
+.sidebar-tab[aria-selected='true'] {
+  background: var(--surface);
+  color: var(--text);
+}
+
+/*
+ * Panel controls, revealed on hover.
+ *
+ * Overlaid rather than given a title bar of their own: a rail is narrow, and a
+ * second bar above the navigator's own search field would be one row of chrome
+ * too many for something you look at all day.
+ */
+.sidebar-actions {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.5rem;
+  display: flex;
+  gap: 0.1rem;
+  opacity: 0;
+  transition: opacity var(--fast) var(--ease);
+}
+
+.sidebar:hover .sidebar-actions,
+.sidebar:focus-within .sidebar-actions {
+  opacity: 1;
+}
+
+.sidebar-actions .icon-button {
+  width: 22px;
+  height: 22px;
+  background: var(--surface-sunken);
+}
+
+.sidebar-actions .icon-button svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* The grab strip sits half outside the sidebar so it is reachable either way. */
+.sidebar-resize {
+  position: absolute;
+  z-index: 6;
+}
+
+.sidebar-resize[data-side='left'] {
+  top: 0;
+  bottom: 0;
+  right: -4px;
+  width: 9px;
+  cursor: col-resize;
+}
+
+.sidebar-resize[data-side='right'] {
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  width: 9px;
+  cursor: col-resize;
+}
+
+.sidebar-resize[data-side='bottom'] {
+  left: 0;
+  right: 0;
+  top: -4px;
+  height: 9px;
+  cursor: row-resize;
+}
+
+.sidebar-resize:hover {
+  background: var(--accent-faint);
+}
+
+/* -- Floating windows ------------------------------------------------------ */
+
+.window {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: window-in var(--fast) var(--ease);
+}
+
+@keyframes window-in {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+}
+
+.window[data-maximized='true'] {
+  inset: calc(var(--header-height) + env(safe-area-inset-top)) 0 var(--statusbar-height) 0;
+  border-radius: 0;
+  border-width: 1px 0 0 0;
+}
+
+/*
+ * A modal is centred by CSS and has no rectangle of its own, because it cannot
+ * be moved or resized. Everything under it is `inert`, so this is genuinely the
+ * only thing on screen you can reach.
+ */
+.window[data-modal='true'] {
+  border-color: var(--rule);
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(880px, calc(100vw - 3rem));
+  height: min(640px, calc(100vh - var(--header-height) - 5rem));
+  animation: modal-in var(--medium) var(--ease);
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 8px)) scale(0.99);
+  }
+}
+
+.window-bar[data-fixed='true'] {
+  cursor: default;
+}
+
+.window-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 34px;
+  padding: 0 0.35rem 0 0.75rem;
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--rule);
+  cursor: grab;
+  user-select: none;
+}
+
+.window-bar:active {
+  cursor: grabbing;
+}
+
+.window-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.window-actions {
+  flex: none;
+  display: flex;
+  gap: 0.1rem;
+}
+
+.window-actions .icon-button {
+  width: 24px;
+  height: 24px;
+}
+
+.window-actions .icon-button svg {
+  width: 13px;
+  height: 13px;
+}
+
+.window-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* A minimized window keeps a handle at the bottom of the screen. */
+.window-pill {
+  position: fixed;
+  left: 1rem;
+  bottom: calc(var(--statusbar-height) + 0.5rem);
+  padding: 0.3rem 0.75rem;
+  border-radius: 99px;
+  background: var(--surface-raised);
+  border: 1px solid var(--rule);
+  box-shadow: var(--shadow-md);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.window-resize {
+  position: absolute;
+  z-index: 2;
+}
+
+.window-resize[data-handle='n'] { top: -3px; left: 10px; right: 10px; height: 8px; cursor: ns-resize; }
+.window-resize[data-handle='s'] { bottom: -3px; left: 10px; right: 10px; height: 8px; cursor: ns-resize; }
+.window-resize[data-handle='e'] { right: -3px; top: 10px; bottom: 10px; width: 8px; cursor: ew-resize; }
+.window-resize[data-handle='w'] { left: -3px; top: 10px; bottom: 10px; width: 8px; cursor: ew-resize; }
+.window-resize[data-handle='ne'] { top: -3px; right: -3px; width: 14px; height: 14px; cursor: nesw-resize; }
+.window-resize[data-handle='nw'] { top: -3px; left: -3px; width: 14px; height: 14px; cursor: nwse-resize; }
+.window-resize[data-handle='se'] { bottom: -3px; right: -3px; width: 14px; height: 14px; cursor: nwse-resize; }
+.window-resize[data-handle='sw'] { bottom: -3px; left: -3px; width: 14px; height: 14px; cursor: nesw-resize; }
+
+/* -- The snap preview ------------------------------------------------------ */
+
+.drop-preview {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1.5px solid var(--accent);
+  transition: left var(--fast) var(--ease), top var(--fast) var(--ease),
+    width var(--fast) var(--ease), height var(--fast) var(--ease);
+}
+
+/* While a drag is live, nothing else should react to the pointer. */
+body.is-dragging {
+  user-select: none;
+  cursor: grabbing;
+}
+
+body.is-dragging iframe,
+body.is-dragging .cm-editor {
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * Navigator
+ * ------------------------------------------------------------------------ */
+
+.navigator {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/*
+ * The two halves.
+ *
+ * One panel with a seam in it, not two panels: the top half is sized by its own
+ * contents until the seam is dragged, so the rail opens looking like the single
+ * list it used to be. A closed half keeps its header — that strip is the only
+ * way back to it — and where there is no seam between two halves, the rule that
+ * would have been under the seam takes its place.
+ */
+.nav-halves {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.nav-half {
+  flex: none;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Alone, an open half takes the rail. Beside another it is content-sized (or the
+   height the seam was dragged to), and the lower half takes what is left. */
+.nav-half[data-open='true'] {
+  flex: 1 1 auto;
+}
+
+.nav-halves[data-split='true'] > .nav-half[data-half='places'] {
+  flex: 0 1 auto;
+  /* Half the rail is the most the short lists may claim; past that the browser
+     is the one that stops being usable. */
+  max-height: 55%;
+}
+
+.nav-half + .nav-half {
+  border-top: 1px solid var(--rule);
+}
+
+.nav-half-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.4rem 0.5rem 0.25rem;
+}
+
+/* The topmost header yields the corner to `.sidebar-actions`, which floats over
+   it — see `--corner-actions`. */
+.nav-half:first-child > .nav-half-head {
+  padding-right: var(--corner-actions, 0.5rem);
+}
+
+/*
+ * A half's name is sentence case and a shade stronger than a section's uppercase
+ * label, so two levels of collapsible heading read as two levels rather than as
+ * a column of headings.
+ */
+.nav-half-toggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  padding: 0.1rem 0;
+}
+
+.nav-half-toggle:hover {
+  color: var(--text);
+}
+
+.nav-half-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 0.35rem;
+}
+
+/* The seam is a rule you can drag, with a grab strip wider than the rule so it
+   is catchable, and no gap either side of it — the halves stay connected. */
+.nav-seam {
+  position: relative;
+  flex: none;
+  height: 1px;
+  background: var(--rule);
+  cursor: row-resize;
+}
+
+.nav-seam::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -4px;
+  bottom: -4px;
+}
+
+.nav-seam:hover {
+  background: var(--accent-faint);
+}
+
+.nav-search {
+  flex: none;
+  padding: 0.5rem 0.5rem 0.35rem;
+}
+
+/* Under a half's header the search field needs no top padding of its own. */
+.nav-half-body > .nav-search {
+  padding-top: 0.15rem;
+}
+
+/* The browser scrolls inside the half; the search field above it does not move. */
+.nav-browser {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 0.35rem;
+}
+
+.nav-search-input {
+  width: 100%;
+  padding: 0.4rem 0.6rem;
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   background: var(--surface);
@@ -177,81 +954,308 @@ button {
   outline: none;
 }
 
-.sidebar-search:focus {
+.nav-search-input:focus {
   border-color: var(--accent-faint);
 }
 
-.sidebar-list {
+.nav-scroll {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 0 0.4rem 0.6rem;
-  list-style: none;
-  margin: 0;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 0.5rem;
 }
 
-.sidebar-item {
-  display: block;
-  width: 100%;
+/*
+ * Sections are balanced by intent: the short ones stay short, and only the
+ * pages browser grows, so a space with four hundred notes still shows Views and
+ * Recent without scrolling past them.
+ */
+.nav-section {
+  flex: none;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.nav-section[data-grow='true'][data-open='true'] {
+  flex: 1;
+}
+
+.nav-section-head {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.35rem 0.5rem 0.15rem;
+}
+
+.nav-section-toggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
   text-align: left;
-  padding: 0.4rem 0.55rem;
-  border-radius: var(--radius-sm);
-  font-size: 0.8125rem;
-  color: var(--text-muted);
-  line-height: 1.35;
-}
-
-.sidebar-item:hover {
-  background: var(--surface);
-  color: var(--text);
-}
-
-.sidebar-item[aria-current='page'] {
-  background: var(--accent-soft);
-  color: var(--text);
-}
-
-.sidebar-item small {
-  display: block;
-  color: var(--text-faintest);
-  font-size: 0.75rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sidebar-section {
-  padding: 0.5rem 0.95rem 0.25rem;
   font-size: 0.6875rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-faintest);
+  padding: 0.1rem 0;
 }
 
-.sidebar-sublist {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.nav-section-toggle:hover {
+  color: var(--text-muted);
 }
 
-/* -- Main ------------------------------------------------------------------ */
+.nav-section-action {
+  display: grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 0.3rem;
+  border-radius: 4px;
+  font-size: 0.6875rem;
+  color: var(--text-faintest);
+}
 
-.main {
-  flex: 1;
-  min-width: 0;
+.nav-section-action:hover {
+  background: var(--surface);
+  color: var(--text-muted);
+}
+
+.nav-section-action svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.nav-section-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 0.35rem;
+}
+
+.nav-modes {
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+}
+
+.nav-mode {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 20px;
+  border-radius: 4px;
+  color: var(--text-faintest);
+}
+
+.nav-mode:hover {
+  background: var(--surface);
+  color: var(--text-muted);
+}
+
+.nav-mode[aria-pressed='true'] {
+  background: var(--surface);
+  color: var(--accent);
+}
+
+.nav-mode svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* -- Rows ------------------------------------------------------------------ */
+
+.nav-rows {
   display: flex;
   flex-direction: column;
-  position: relative;
 }
 
-.editor-host {
+.nav-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.3rem 0.4rem;
+  /* Each level of nesting indents by one step, set from `data-depth`. */
+  padding-left: calc(0.4rem + var(--nav-depth, 0) * 0.85rem);
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+  min-width: 0;
+}
+
+.nav-row[data-depth='1'] { --nav-depth: 1; }
+.nav-row[data-depth='2'] { --nav-depth: 2; }
+.nav-row[data-depth='3'] { --nav-depth: 3; }
+.nav-row[data-depth='4'] { --nav-depth: 4; }
+.nav-row[data-depth='5'] { --nav-depth: 5; }
+
+.nav-row:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.nav-row[aria-current='page'],
+.nav-row[data-selected='true'] {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.nav-row-label {
   flex: 1;
-  min-height: 0;
+  min-width: 0;
   overflow: hidden;
-  padding: 0 var(--gutter);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.editor-host .cm-editor {
+.nav-row-detail {
+  flex: none;
+  font-size: 0.6875rem;
+  color: var(--text-faintest);
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-row-icon,
+.nav-row-twisty {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  color: var(--text-faintest);
+}
+
+.nav-row-icon svg,
+.nav-row-twisty svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.nav-row-twisty svg {
+  width: 12px;
+  height: 12px;
+  transition: transform var(--fast) var(--ease);
+}
+
+/*
+ * A folder row is two controls: the folder itself, and the page that belongs to
+ * it. The tools sit on the right and appear on hover, so the row still reads as
+ * one line of a list until you reach for them.
+ */
+.nav-row-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.nav-row-group .nav-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.nav-row-tools {
+  position: absolute;
+  right: 0.25rem;
+  display: flex;
+  gap: 0.05rem;
+  opacity: 0;
+  transition: opacity var(--fast) var(--ease);
+}
+
+.nav-row-group:hover .nav-row-tools,
+.nav-row-group:focus-within .nav-row-tools {
+  opacity: 1;
+}
+
+.nav-row-tool {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: var(--text-faint);
+  background: var(--surface);
+}
+
+.nav-row-tool:hover {
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+
+/* Faint when the folder's page has not been written yet: the control is still
+   offered, because starting it and reading it are the same gesture. */
+.nav-row-tool[data-empty='true'] {
+  color: var(--text-faintest);
+}
+
+.nav-row-tool svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The count would sit under the tools; move it aside while they are showing. */
+.nav-row-group:hover .nav-row-detail {
+  opacity: 0;
+}
+
+.nav-row[data-expanded='true'] .nav-row-twisty svg,
+.nav-section[data-open='true'] > .nav-section-head .nav-row-twisty svg,
+.nav-half[data-open='true'] > .nav-half-head .nav-row-twisty svg {
+  transform: rotate(90deg);
+}
+
+.nav-empty {
+  padding: 0.5rem 0.65rem;
+  font-size: 0.75rem;
+  color: var(--text-faintest);
+}
+
+/* -- Columns --------------------------------------------------------------- */
+
+.nav-columns {
+  display: flex;
   height: 100%;
+  min-height: 12rem;
+  overflow-x: auto;
+}
+
+.nav-column {
+  flex: 0 0 13rem;
+  min-width: 0;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+  border-right: 1px solid var(--rule);
+}
+
+.nav-column:last-child {
+  border-right: none;
 }
 
 /* -- Status bar ------------------------------------------------------------ */
@@ -294,13 +1298,19 @@ button {
 }
 
 /* ---------------------------------------------------------------------------
- * Capture — the mobile launch surface
+ * Capture — the braindump surface
+ *
+ * A sheet on a phone, where it is the whole session, and a card on a desktop,
+ * where it is an interruption to whatever is on screen behind it. Same markup:
+ * the difference is one rectangle.
  * ------------------------------------------------------------------------ */
 
 .capture {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  /* Above the navigator drawer (50), below the palette (60) and the toasts
+     that report what the save did. */
+  z-index: 56;
   background: var(--bg);
   display: flex;
   flex-direction: column;
@@ -312,6 +1322,42 @@ button {
   from {
     opacity: 0;
     transform: translateY(8px);
+  }
+}
+
+.capture-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: rgb(0 0 0 / 0.25);
+  animation: fade-in var(--fast) var(--ease);
+}
+
+/* On a desktop the note you were reading stays visible behind the card, which
+   is what makes Escape feel like putting a pen down rather than navigating. */
+@media (min-width: 721px) {
+  .capture {
+    inset: auto;
+    top: 12vh;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(660px, calc(100vw - 3rem));
+    height: min(440px, calc(100vh - 20vh));
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+    /* Its own keyframe, because the resting transform is a centring one and a
+       `translateY` animation would drop the `translateX` for its duration —
+       the card would fly in from the left. */
+    animation: capture-card-in var(--medium) var(--ease);
+  }
+
+  @keyframes capture-card-in {
+    from {
+      opacity: 0;
+      transform: translate(-50%, 8px);
+    }
   }
 }
 
@@ -662,45 +1708,44 @@ button {
 }
 
 /* ---------------------------------------------------------------------------
- * Tasks view
+ * Virtual pages — tasks, tags. Views over the space, not documents in it.
  * ------------------------------------------------------------------------ */
 
-.tasks {
-  flex: 1;
-  overflow-y: auto;
-  padding: 1.5rem var(--gutter) 30vh;
+.listing {
+  padding: 1.5rem var(--gutter) 2rem;
 }
 
-.tasks-inner {
+.listing-inner {
   max-width: var(--editor-measure);
   margin: 0 auto;
 }
 
-.tasks h1 {
+.listing h1 {
+  font-family: var(--font-ui-heading);
   font-size: 1.7rem;
-  font-weight: 700;
+  font-weight: var(--ui-heading-weight);
   letter-spacing: -0.02em;
   margin: 0 0 0.15rem;
 }
 
-.tasks-sub {
+.listing-sub {
   color: var(--text-faint);
   font-size: 0.8125rem;
   margin: 0 0 1.5rem;
 }
 
-.tasks-filters {
+.listing-filters {
   display: flex;
   gap: 0.35rem;
   margin-bottom: 1.25rem;
   flex-wrap: wrap;
 }
 
-.tasks-group {
+.listing-group {
   margin-bottom: 1.75rem;
 }
 
-.tasks-group-title {
+.listing-group-title {
   font-size: 0.75rem;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -711,11 +1756,67 @@ button {
   gap: 0.5rem;
 }
 
-.tasks-group-title::after {
+.listing-group-title::after {
   content: '';
   flex: 1;
   height: 1px;
   background: var(--rule);
+}
+
+.listing-group-title button {
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+
+.listing-group-title button:hover {
+  color: var(--accent);
+}
+
+.listing-line {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-family: var(--font-editor);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+  padding: 0.25rem 0.4rem;
+  border-radius: var(--radius-sm);
+  overflow-wrap: anywhere;
+}
+
+.listing-line:hover {
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+
+.tag-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  color: var(--tag);
+  font-size: 0.875rem;
+}
+
+.tag-chip:hover {
+  border-color: var(--rule-strong);
+}
+
+.tag-chip-count {
+  color: var(--text-faintest);
+  font-size: 0.8em;
 }
 
 .task {
@@ -799,6 +1900,745 @@ button {
 
 .task-due[data-overdue='true'] {
   color: var(--danger);
+}
+
+/* ---------------------------------------------------------------------------
+ * Settings
+ *
+ * A modal split into an icon rail and one panel. Every control applies as you
+ * touch it, and the appearance ones change the surface they are drawn on,
+ * which is the point of showing them here rather than behind a preview.
+ * ------------------------------------------------------------------------ */
+
+.settings {
+  height: 100%;
+  display: flex;
+  min-height: 0;
+}
+
+.settings-rail {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.5rem 0.35rem;
+  background: var(--surface-sunken);
+  border-right: 1px solid var(--rule);
+}
+
+/*
+ * Icons only. Eight labelled tabs down the side of a modal is a column of text
+ * competing with the settings themselves; the name lives in the tooltip and in
+ * the accessible label, where it costs nothing to have and nothing to ignore.
+ */
+.settings-rail-tab {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+
+.settings-rail-tab:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.settings-rail-tab[aria-pressed='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.settings-rail-tab svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.settings-panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-panel-head {
+  flex: none;
+  padding: 1.1rem 1.5rem 0.75rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.settings-panel-head h2 {
+  margin: 0;
+  font-family: var(--font-ui-heading);
+  font-size: 1.0625rem;
+  font-weight: var(--ui-heading-weight);
+}
+
+.settings-panel-head p {
+  margin: 0.2rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--text-faint);
+}
+
+.settings-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1.25rem 1.5rem 2rem;
+}
+
+.settings-section {
+  margin-bottom: 2rem;
+}
+
+.settings-group-title {
+  margin: 0 0 0.6rem;
+  font-size: 0.6875rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-faintest);
+  font-weight: 400;
+}
+
+.settings-section .listing-group-title {
+  margin-bottom: 1rem;
+}
+
+/* -- Switch ---------------------------------------------------------------- */
+
+.switch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 99px;
+  background: var(--rule-strong);
+  transition: background var(--fast) var(--ease);
+  flex: none;
+}
+
+.switch[aria-checked='true'] {
+  background: var(--accent);
+}
+
+.switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--fast) var(--ease);
+}
+
+.switch[aria-checked='true'] .switch-knob {
+  transform: translateX(16px);
+}
+
+/* -- Facts, lists and keys ------------------------------------------------- */
+
+.settings-fact {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  padding: 0.35rem 0;
+  font-size: 0.8125rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.settings-fact span {
+  flex: none;
+  width: 11rem;
+  color: var(--text-faint);
+}
+
+.settings-fact strong {
+  font-weight: 400;
+  color: var(--text);
+}
+
+.settings-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.settings-list li {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.settings-list li[data-error='true'] strong {
+  color: var(--danger);
+}
+
+.settings-list-main {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.settings-list small {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.75rem;
+  color: var(--text-faint);
+  line-height: 1.5;
+}
+
+.settings-tag {
+  font-size: 0.6875rem;
+  font-family: var(--font-mono);
+  color: var(--text-faintest);
+  background: var(--surface-sunken);
+  border-radius: 4px;
+  padding: 0.05rem 0.35rem;
+}
+
+.settings-keys {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.settings-keys li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.3rem 0;
+  font-size: 0.8125rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.settings-unbound {
+  font-size: 0.6875rem;
+  color: var(--text-faintest);
+}
+
+.settings-details {
+  margin-top: 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.settings-details summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 0.25rem 0;
+}
+
+.settings-tools {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+}
+
+.settings-tools li {
+  display: grid;
+  grid-template-columns: 10rem 1fr;
+  gap: 0.75rem;
+  padding: 0.3rem 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/* A capability that is switched off is still listed, greyed: you cannot tell a
+   missing feature from a disabled one unless the disabled one is visible. */
+.settings-tools li[data-off='true'] {
+  opacity: 0.42;
+}
+
+.settings-tools code {
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+/*
+ * A row of settings: the name on the left, the control on the right, and
+ * whatever space is left over between them.
+ *
+ * The control is pushed to the trailing edge rather than pinned to a column,
+ * so the gap grows and shrinks with the panel instead of the label being cut
+ * off at a fixed 11rem. Every switch, segmented control and slider therefore
+ * lines up down the right-hand side at any width — which is what makes a long
+ * list of them scannable, since the eye follows one edge rather than hunting
+ * for each control after a different length of text.
+ */
+.settings-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding: 0.55rem 0;
+}
+
+.settings-label {
+  /* Takes the slack, so the gap is what flexes and the text is what wraps. */
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.875rem;
+  color: var(--text);
+}
+
+.settings-label small {
+  display: block;
+  color: var(--text-faint);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  margin-top: 0.1rem;
+}
+
+.settings-control {
+  flex: 0 0 auto;
+  max-width: min(22rem, 60%);
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* A text field is the one control with no natural width, so it is given one. */
+.settings-control .field {
+  width: min(22rem, 100%);
+}
+
+.settings-control .slider {
+  width: min(14rem, 100%);
+}
+
+/*
+ * A description, not a control.
+ *
+ * This was a filled, bordered box, which is the same shape as a disabled input
+ * and the same shape as the type preview below it — so a paragraph explaining a
+ * setting read as another setting. Prose set against a rule says "read me"
+ * rather than "fill me in", and nothing about it competes with the real
+ * controls it sits among.
+ */
+.settings-note {
+  font-size: 0.8125rem;
+  line-height: 1.65;
+  color: var(--text-muted);
+  border-left: 2px solid var(--rule-strong);
+  padding: 0 0 0 0.9rem;
+  margin: 0 0 1.1rem;
+  max-width: 46rem;
+}
+
+.settings-note code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+/* -- Setup steps ----------------------------------------------------------- */
+
+/*
+ * Numbered instructions, for the two places somebody has to go and do something
+ * elsewhere before coming back. Numbered because the order matters and because
+ * "I got to step 3" is how people describe where they are stuck.
+ */
+.settings-steps {
+  margin: 0 0 1.1rem;
+  padding-left: 1.4rem;
+  font-size: 0.8125rem;
+  line-height: 1.7;
+  color: var(--text-muted);
+  max-width: 46rem;
+}
+
+.settings-steps li {
+  margin-bottom: 0.4rem;
+}
+
+.settings-steps li::marker {
+  color: var(--text-faintest);
+}
+
+.settings-steps strong {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* A value to copy elsewhere, shown as the value rather than described. */
+.settings-copy {
+  display: inline;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--text);
+  background: var(--surface-sunken);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0.05em 0.35em;
+  word-break: break-all;
+  transition: border-color var(--fast) var(--ease);
+}
+
+.settings-copy:hover {
+  border-color: var(--accent);
+}
+
+.settings-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.settings-result {
+  margin: 0.75rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+/* -- Segmented control ----------------------------------------------------- */
+
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border-radius: var(--radius);
+  border: 1px solid var(--rule);
+  background: var(--surface-sunken);
+}
+
+.segment {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: calc(var(--radius) - 3px);
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+
+.segment:hover {
+  color: var(--text);
+}
+
+.segment[aria-pressed='true'] {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+.segment svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The label is redundant next to the glyph once the icons are recognisable,
+   but it is what makes the control usable the first time. */
+.segmented[data-icons='true'] .segment-label {
+  font-size: 0.8125rem;
+}
+
+/* -- Slider ---------------------------------------------------------------- */
+
+.slider {
+  width: min(20rem, 100%);
+  appearance: none;
+  height: 4px;
+  border-radius: 99px;
+  background: var(--rule-strong);
+  outline: none;
+  cursor: pointer;
+}
+
+.slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 99px;
+  background: var(--accent);
+  border: 2px solid var(--surface);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+}
+
+.slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 99px;
+  background: var(--accent);
+  border: 2px solid var(--surface);
+  cursor: pointer;
+}
+
+/* -- Theme gallery --------------------------------------------------------- */
+
+/*
+ * Twelve palettes, as twelve small pages.
+ *
+ * A theme is not a word, so this is not a list of names. Each card renders its
+ * own theme — background, ink, rule, accent, tag chip, and the title face the
+ * theme is paired with — by scoping that theme's tokens to `.theme-card-page`
+ * (see `previewCss` in `lib/theme.ts`). Inside that element `var(--bg)` means
+ * *that* theme's background, so every rule below is written exactly as it would
+ * be for the real app.
+ *
+ * The tracks are `auto-fill`, not a count: this panel is a modal that can be
+ * 320px wide on a phone and 900px on a desktop, and a fixed three columns would
+ * be either cramped or a row of postage stamps.
+ */
+.theme-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: 0.75rem;
+  margin: 0 0 0.5rem;
+}
+
+.theme-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0;
+  text-align: left;
+  border-radius: var(--radius);
+  /* The selected ring is drawn outside the card, so nothing inside it moves. */
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  transition: outline-color var(--fast) var(--ease);
+}
+
+.theme-card:hover .theme-card-page {
+  border-color: var(--rule-strong);
+}
+
+.theme-card[aria-checked='true'] {
+  outline-color: var(--accent);
+}
+
+/* The miniature. Everything in here is in the theme's own colours. */
+.theme-card-page {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  height: 6.25rem;
+  padding: 0.6rem 0.65rem;
+  overflow: hidden;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  transition: border-color var(--fast) var(--ease);
+}
+
+/*
+ * The title, in the pairing the theme curates.
+ *
+ * Every `--sample-*` falls back to the app's own token, so a theme that
+ * contributes no typography still gets a card that reads correctly — it just
+ * shows the face you are already in, which is the truth about that theme.
+ */
+.theme-card-title {
+  font-family: var(--sample-heading, var(--font-heading));
+  font-weight: var(--sample-heading-weight, var(--heading-weight));
+  font-style: var(--sample-heading-style, normal);
+  font-stretch: var(--sample-heading-stretch, 100%);
+  font-variation-settings: var(--sample-heading-variation, normal);
+  text-transform: var(--sample-heading-transform, none);
+  letter-spacing: var(--sample-heading-tracking, -0.015em);
+  font-size: 1.15rem;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.theme-card-body {
+  font-family: var(--sample-editor, var(--font-editor));
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+  /* Two lines of prose is enough to read a face and not enough to read the text. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.theme-card-marks {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: auto;
+}
+
+.theme-card-tag {
+  font-family: var(--sample-ui, var(--font-ui));
+  font-size: 0.625rem;
+  color: var(--tag);
+  background: var(--tag-soft);
+  border-radius: 4px;
+  padding: 0.05em 0.3em;
+}
+
+/* The accent, as itself: a bar rather than a dot, so its hue is readable. */
+.theme-card-accent {
+  flex: 1;
+  height: 0.375rem;
+  border-radius: 99px;
+  background: var(--accent);
+}
+
+/* Outside the miniature, in the app's colours — a label has to be legible. */
+.theme-card-name {
+  font-size: 0.8125rem;
+  font-weight: var(--ui-heading-weight);
+  color: var(--text);
+  padding: 0 0.15rem;
+}
+
+.theme-card-hint {
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  color: var(--text-faint);
+  padding: 0 0.15rem 0.15rem;
+}
+
+/* -- Type preview ---------------------------------------------------------- */
+
+.type-preview {
+  margin-top: 1.25rem;
+  padding: 1.1rem 1.25rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+/*
+ * The same seven variables the editor's headings read, so what this shows is
+ * what a title in a document will actually do — including a stretched italic.
+ */
+.type-preview h3 {
+  font-family: var(--font-heading);
+  font-weight: var(--heading-weight);
+  font-style: var(--heading-style);
+  font-stretch: var(--heading-stretch);
+  font-variation-settings: var(--heading-variation);
+  text-transform: var(--heading-transform);
+  font-size: calc(1.38em * var(--heading-scale));
+  letter-spacing: var(--heading-tracking-2);
+  margin: 0 0 0.4rem;
+}
+
+.type-preview p {
+  font-family: var(--font-editor);
+  font-size: var(--editor-font-size);
+  line-height: var(--editor-line-height);
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* Matches the editor's inline-code chip, so the preview tells the truth. */
+.type-preview code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  color: var(--code-text);
+  background: var(--code-inline-bg);
+  border: 1px solid var(--code-inline-border);
+  border-radius: 4px;
+  padding: 0.12em 0.34em;
+}
+
+/* Below this the gap has nothing left to give, so the control drops under the
+   label rather than being squeezed into a column too narrow to read. */
+@media (max-width: 720px) {
+  .settings-field {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+
+  .settings-control {
+    max-width: none;
+    justify-content: flex-start;
+  }
+
+  .settings-control .field,
+  .settings-control .slider {
+    width: 100%;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Backlinks
+ * ------------------------------------------------------------------------ */
+
+.backlinks {
+  border-top: 1px solid var(--rule);
+  margin-top: 2rem;
+  padding: 1rem var(--gutter) 25vh;
+}
+
+.backlinks-toggle {
+  display: block;
+  max-width: var(--editor-measure);
+  margin: 0 auto 0.5rem;
+  width: 100%;
+  text-align: left;
+  font-size: 0.6875rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-faintest);
+}
+
+.backlinks-toggle:hover {
+  color: var(--text-muted);
+}
+
+.backlinks-list {
+  list-style: none;
+  margin: 0 auto;
+  padding: 0;
+  max-width: var(--editor-measure);
+}
+
+.backlinks-list > li {
+  margin-bottom: 0.6rem;
+}
+
+.backlinks-source {
+  font-size: 0.8125rem;
+  color: var(--accent);
+}
+
+.backlinks-source:hover {
+  text-decoration: underline;
+}
+
+.backlinks-context {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin: 0.1rem 0 0;
+  font-family: var(--font-editor);
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  border-radius: var(--radius-sm);
+  padding: 0.15rem 0.3rem;
+}
+
+.backlinks-context:hover {
+  background: var(--surface-sunken);
+  color: var(--text);
 }
 
 /* ---------------------------------------------------------------------------
@@ -949,6 +2789,29 @@ button {
   border-color: var(--accent);
 }
 
+/*
+ * A dropdown, wearing the text field's clothes.
+ *
+ * The interface face rather than `.field`'s monospace: a select holds names, not
+ * values you type — and the chevron is the browser's own, because a hand-drawn
+ * one has to be positioned against a control whose metrics differ per platform.
+ */
+.select {
+  font-family: var(--font-ui);
+  cursor: pointer;
+  /* A select is not a text input; the platform's own padding is wrong for it. */
+  padding-right: 0.4rem;
+}
+
+/*
+ * A hint, not a promise: several platforms draw the option list with the system
+ * face whatever a stylesheet says, and there is no way to detect which. The pack
+ * name is legible either way, so the worst case is that it is merely legible.
+ */
+.select option[data-font-sample] {
+  font-family: var(--sample-ui, var(--sample-editor, inherit));
+}
+
 /* ---------------------------------------------------------------------------
  * Empty state — deliberately almost nothing
  * ------------------------------------------------------------------------ */
@@ -983,20 +2846,695 @@ kbd {
 }
 
 /* ---------------------------------------------------------------------------
+ * Spark
+ *
+ * Two shapes, deliberately different. What you said is a bubble, because it is
+ * a remark. What Spark said is a column of prose at the same measure as a note,
+ * because it is an answer, and an answer squeezed into a speech bubble reads
+ * like chatter.
+ * ------------------------------------------------------------------------ */
+
+.spark {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.spark-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  /* The right edge yields to whatever floats over the corner, so the history
+     and new-conversation buttons are never underneath it. */
+  padding: 0.45rem var(--corner-actions, 0.5rem) 0.45rem 0.85rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.spark-mark {
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+}
+
+.spark-mark svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+
+.spark-title {
+  font-size: 0.8125rem;
+  color: var(--text);
+}
+
+/* The pause between sending and the first token, which is otherwise a blank. */
+.spark-thinking {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--text-faint);
+}
+
+.spark-dots::after {
+  content: '';
+  animation: spark-ellipsis 1.2s steps(4, end) infinite;
+}
+
+@keyframes spark-ellipsis {
+  0% { content: ''; }
+  25% { content: '.'; }
+  50% { content: '..'; }
+  75% { content: '...'; }
+}
+
+.spark-history {
+  flex: none;
+  max-height: 40%;
+  overflow-y: auto;
+  padding: 0.35rem;
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--rule);
+}
+
+.spark-history-row {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: var(--radius-sm);
+}
+
+.spark-history-row:hover {
+  background: var(--surface);
+}
+
+.spark-history-row[data-current='true'] {
+  background: var(--accent-soft);
+}
+
+.spark-history-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.spark-history-open span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spark-history-open small {
+  flex: none;
+  font-size: 0.6875rem;
+  color: var(--text-faintest);
+}
+
+.spark-history-row .icon-button {
+  width: 24px;
+  height: 24px;
+  opacity: 0;
+}
+
+.spark-history-row:hover .icon-button {
+  opacity: 1;
+}
+
+.spark-history-row .icon-button svg {
+  width: 13px;
+  height: 13px;
+}
+
+.spark-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1rem var(--gutter) 1.5rem;
+}
+
+.spark-turn {
+  margin-bottom: 1.25rem;
+  max-width: var(--editor-measure);
+}
+
+.spark-turn[data-role='user'] {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.spark-bubble {
+  max-width: 85%;
+  padding: 0.5rem 0.8rem;
+  border-radius: var(--radius) var(--radius) 3px var(--radius);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.spark-prose {
+  font-size: 0.9375rem;
+  line-height: 1.65;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.spark-prose > :first-child {
+  margin-top: 0;
+}
+
+.spark-prose > :last-child {
+  margin-bottom: 0;
+}
+
+.spark-prose p {
+  margin: 0 0 0.75rem;
+}
+
+.spark-prose h2,
+.spark-prose h3,
+.spark-prose h4 {
+  font-family: var(--font-ui-heading);
+  font-weight: var(--ui-heading-weight);
+  margin: 1.25rem 0 0.5rem;
+  line-height: 1.3;
+}
+
+.spark-prose h2 { font-size: 1.0625rem; }
+.spark-prose h3 { font-size: 0.9375rem; }
+.spark-prose h4 { font-size: 0.875rem; color: var(--text-muted); }
+
+.spark-prose ul,
+.spark-prose ol {
+  margin: 0 0 0.75rem;
+  padding-left: 1.3rem;
+}
+
+.spark-prose li {
+  margin-bottom: 0.2rem;
+}
+
+.spark-prose blockquote {
+  margin: 0 0 0.75rem;
+  padding-left: 0.85rem;
+  border-left: 2px solid var(--rule-strong);
+  color: var(--text-muted);
+}
+
+.spark-prose code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  background: var(--code-inline-bg);
+  border: 1px solid var(--code-inline-border);
+  border-radius: 4px;
+  padding: 0.05em 0.3em;
+}
+
+.spark-prose pre {
+  margin: 0 0 0.75rem;
+  padding: 0.7rem 0.85rem;
+  background: var(--code-bg);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+}
+
+.spark-prose pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--code-text);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
+
+.spark-prose hr {
+  border: none;
+  border-top: 1px solid var(--rule);
+  margin: 1rem 0;
+}
+
+.spark-prose mark {
+  background: var(--highlight-bg);
+  color: inherit;
+}
+
+.spark-prose a {
+  color: var(--accent);
+}
+
+.md-wikilink {
+  color: var(--accent);
+}
+
+.md-task {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4em;
+}
+
+.md-task[data-done='true'] {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+/* The caret that says a reply is still arriving. */
+.spark-cursor {
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  margin-left: 0.1em;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  opacity: 0.65;
+  animation: spark-blink 1s steps(2, start) infinite;
+}
+
+@keyframes spark-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* -- What Spark did -------------------------------------------------------- */
+
+.spark-tools {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.spark-tools li {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--text-faint);
+  padding: 0.15rem 0.5rem;
+  border-left: 2px solid var(--rule-strong);
+}
+
+.spark-tools li[data-pending='true'] {
+  border-left-color: var(--accent);
+  color: var(--text-muted);
+}
+
+.spark-tools li[data-ok='false'] {
+  border-left-color: var(--danger);
+  color: var(--danger);
+}
+
+.spark-tools svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.spark-error {
+  max-width: var(--editor-measure);
+  padding: 0.6rem 0.85rem;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--danger);
+  font-size: 0.8125rem;
+}
+
+/* -- Empty state ----------------------------------------------------------- */
+
+.spark-welcome {
+  max-width: var(--editor-measure);
+  color: var(--text-faint);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.spark-warning {
+  color: var(--danger);
+}
+
+.spark-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 1rem;
+}
+
+.spark-suggestion {
+  padding: 0.35rem 0.7rem;
+  border-radius: 99px;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  text-align: left;
+}
+
+.spark-suggestion:hover {
+  border-color: var(--accent-faint);
+  color: var(--text);
+}
+
+/* -- Composer -------------------------------------------------------------- */
+
+.spark-composer {
+  flex: none;
+  display: flex;
+  /* Wraps so the attachment row can take a line of its own above the input,
+     rather than squeezing into the row with it. */
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.4rem;
+  padding: 0.6rem var(--gutter) calc(0.6rem + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--rule);
+  background: var(--bg);
+}
+
+/* -- Attachments ----------------------------------------------------------- */
+
+.spark-attachments {
+  flex-basis: 100%;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.spark-attachments li {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  max-width: 14rem;
+  padding: 0.2rem 0.25rem 0.2rem 0.55rem;
+  border-radius: 99px;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.spark-attachments li[data-pending='true'] {
+  border-color: var(--accent-faint);
+  color: var(--accent);
+  padding-right: 0.55rem;
+}
+
+.spark-attachments span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spark-attachments .icon-button {
+  width: 18px;
+  height: 18px;
+  color: var(--text-faint);
+}
+
+.spark-attachments .icon-button svg {
+  width: 11px;
+  height: 11px;
+}
+
+/* The real input is unreachable; the paperclip is what you press. */
+.spark-file-input {
+  display: none;
+}
+
+/* -- Memory, in the conversation ------------------------------------------- */
+
+/*
+ * Two quiet lines: what a consolidation pass did, and how many threads are
+ * waiting. Both are Spark talking about itself rather than answering, so they
+ * are set faint, at the size of the tool trail, and both are buttons — the only
+ * useful response to either is to go and look.
+ */
+.spark-memory-note,
+.spark-threads {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: var(--editor-measure);
+  margin-top: 0.5rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  font-size: 0.75rem;
+  color: var(--text-faint);
+  text-align: left;
+}
+
+.spark-memory-note:hover,
+.spark-threads:hover {
+  border-color: var(--accent-faint);
+  color: var(--text-muted);
+}
+
+.spark-memory-note svg,
+.spark-threads svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+}
+
+.spark-threads {
+  margin-top: 1rem;
+}
+
+/* ---------------------------------------------------------------------------
+ * Memory
+ *
+ * A reading page, not a control panel: the measure is the editor's, the lists
+ * are prose-width, and the only controls are "open the page behind this" and
+ * "forget this line". Everything else you would want to do is editing, and the
+ * editor is one click away on every section.
+ * ------------------------------------------------------------------------ */
+
+.memory {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.memory-head {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 1rem var(--gutter);
+  border-bottom: 1px solid var(--rule);
+}
+
+.memory-title h1 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.memory-title p {
+  margin: 0.15rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--text-faint);
+}
+
+.memory-body {
+  padding: 1.25rem var(--gutter) 2rem;
+  max-width: var(--editor-measure);
+}
+
+.memory-section {
+  margin-bottom: 2rem;
+}
+
+.memory-section header {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.memory-section h2 {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.memory-section header .icon-button {
+  width: 22px;
+  height: 22px;
+  opacity: 0;
+}
+
+.memory-section:hover header .icon-button,
+.memory-section header .icon-button:focus-visible {
+  opacity: 1;
+}
+
+.memory-section header .icon-button svg {
+  width: 13px;
+  height: 13px;
+}
+
+.memory-blurb {
+  margin: 0.3rem 0 0.75rem;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: var(--text-faint);
+}
+
+.memory-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.memory-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.memory-list li:hover {
+  background: var(--surface);
+}
+
+.memory-list li[data-done='true'] .memory-text {
+  text-decoration: line-through;
+  color: var(--text-faintest);
+}
+
+.memory-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.memory-due,
+.memory-when {
+  flex: none;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faintest);
+}
+
+.memory-due {
+  color: var(--accent);
+}
+
+.memory-list .icon-button {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  opacity: 0;
+  color: var(--text-faint);
+}
+
+.memory-list li:hover .icon-button,
+.memory-list .icon-button:focus-visible {
+  opacity: 1;
+}
+
+.memory-list .icon-button:hover {
+  color: var(--danger);
+}
+
+.memory-list .icon-button svg {
+  width: 12px;
+  height: 12px;
+}
+
+.memory-footer {
+  margin: 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rule);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: var(--text-faintest);
+}
+
+.spark-input {
+  flex: 1;
+  min-width: 0;
+  /* Grows with the message and then scrolls, so the composer never eats the
+     conversation it belongs to. */
+  min-height: 2.25rem;
+  max-height: 40vh;
+  field-sizing: content;
+  resize: none;
+  padding: 0.5rem 0.7rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  outline: none;
+}
+
+.spark-input:focus {
+  border-color: var(--accent-faint);
+}
+
+.spark-composer .icon-button {
+  width: 34px;
+  height: 34px;
+  color: var(--accent);
+}
+
+.spark-composer .icon-button:disabled {
+  color: var(--text-faintest);
+  cursor: default;
+}
+
+/* ---------------------------------------------------------------------------
  * Responsive
+ *
+ * A phone is not a small desktop. Tiling, floating and dragging all go away;
+ * what is left is one document at a time, the navigator as a drawer over it,
+ * and windows promoted to full-screen sheets.
  * ------------------------------------------------------------------------ */
 
 @media (max-width: 720px) {
   :root {
     --gutter: 1rem;
-    --editor-font-size: 1.0625rem;
   }
 
-  .sidebar {
+  .sidebar[data-drawer='true'] {
     position: fixed;
     inset: 0 auto 0 0;
     z-index: 50;
-    width: min(300px, 84vw);
+    width: min(320px, 86vw);
     box-shadow: var(--shadow-lg);
     animation: slide-in var(--medium) var(--ease);
   }
@@ -1011,6 +3549,15 @@ kbd {
     opacity: 1;
   }
 
+  .tabs {
+    /* One tile, and its name is already in the header. */
+    display: none;
+  }
+
+  .tile {
+    border: none;
+  }
+
   .statusbar {
     display: none;
   }
@@ -1021,6 +3568,29 @@ kbd {
 
   .empty-hint {
     display: none;
+  }
+
+  .settings-rail {
+    flex-direction: row;
+    border-right: none;
+    border-bottom: 1px solid var(--rule);
+    overflow-x: auto;
+  }
+
+  .settings {
+    flex-direction: column;
+  }
+
+  .settings-field,
+  .settings-fact {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.4rem;
+  }
+
+  .settings-label,
+  .settings-fact span {
+    width: auto;
   }
 }
 
@@ -1036,6 +3606,56 @@ kbd {
   z-index: 45;
   background: rgb(0 0 0 / 0.25);
   animation: fade-in var(--fast) var(--ease);
+}
+
+/* A modal's scrim covers the header too: the whole app is out of reach, and
+   dimming only part of it would suggest otherwise. */
+.scrim[data-modal='true'] {
+  z-index: 120;
+  background: rgb(0 0 0 / 0.38);
+}
+
+.window[data-modal='true'] {
+  z-index: 121;
+}
+
+/*
+ * A small screen has no room for a modal to be a window on something.
+ *
+ * Settings is the only modal, and the centred 880×640 box becomes a letterbox
+ * with a gutter of dimmed app around it once the viewport is close to those
+ * numbers — an icon rail, a heading and about four controls, with everything it
+ * is competing with still visible behind. So below the phone breakpoint, or on
+ * anything too short to hold the box at full height, it takes the whole
+ * viewport and reads as a place you went to. Its own title bar carries the
+ * close button, and Escape still works, so covering the header costs nothing.
+ *
+ * `height` and `width` are reset to `auto` because `inset` alone does not
+ * unset them, and `transform` because the centring one would offset a box that
+ * is already exactly the viewport.
+ */
+@media (max-width: 720px), (max-height: 640px) {
+  .window[data-modal='true'] {
+    inset: env(safe-area-inset-top) 0 0 0;
+    width: auto;
+    height: auto;
+    transform: none;
+    border-radius: 0;
+    border-width: 1px 0 0 0;
+    animation: modal-sheet-in var(--medium) var(--ease);
+  }
+
+  @keyframes modal-sheet-in {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+  }
+
+  /* The home indicator sits over the last control otherwise. */
+  .window[data-modal='true'] .settings-panel-body {
+    padding-bottom: calc(2rem + env(safe-area-inset-bottom));
+  }
 }
 
 .visually-hidden {

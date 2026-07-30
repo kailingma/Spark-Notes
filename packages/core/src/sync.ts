@@ -1,6 +1,33 @@
 import type { SyncStatus } from '@spark/plugin-sdk';
 import type { EventBus } from './events.js';
 
+/**
+ * The GitHub OAuth app, as the browser is allowed to see it.
+ *
+ * There is no `clientSecret` field, and that is the point — the same rule the
+ * AI key follows. The client *id* is here because it is not a secret: it is
+ * about to appear in the authorize URL this browser gets redirected to.
+ */
+export interface GitHubAppConfig {
+  clientId: string;
+  hasSecret: boolean;
+  /** Last four characters of the secret, for telling two apps apart. */
+  secretHint: string;
+  origin: string;
+  /** Exactly what to paste into GitHub's "Authorization callback URL". */
+  callbackUrl: string;
+  source: 'stored' | 'env' | 'none';
+  /** True when sign-in would actually work right now. */
+  configured: boolean;
+}
+
+/** The writable half. An omitted `clientSecret` leaves the stored one alone. */
+export interface GitHubAppPatch {
+  clientId?: string;
+  clientSecret?: string;
+  origin?: string;
+}
+
 export interface GitStatus {
   /** False when the space isn't a git repo or no remote is configured. */
   configured: boolean;
@@ -41,7 +68,47 @@ export class SyncController {
     private readonly baseUrl = '/api/git',
     /** How often sync mode reconciles with the remote. */
     private readonly intervalMs = 60_000,
+    /** Where the OAuth app's own settings live. */
+    private readonly appUrl = '/api/github/app',
   ) {}
+
+  // -- the GitHub OAuth app -------------------------------------------------
+
+  /** Reads the OAuth app Spark signs in through, secret redacted. */
+  async githubApp(): Promise<GitHubAppConfig> {
+    const res = await fetch(this.appUrl);
+    if (!res.ok) throw new Error(`Could not read the GitHub settings (${res.status}).`);
+    return (await res.json()) as GitHubAppConfig;
+  }
+
+  async saveGitHubApp(patch: GitHubAppPatch): Promise<GitHubAppConfig> {
+    const res = await fetch(this.appUrl, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) throw new Error((await res.text()) || `Could not save (${res.status}).`);
+    return (await res.json()) as GitHubAppConfig;
+  }
+
+  /** Forgets the stored app; the server falls back to its environment. */
+  async clearGitHubApp(): Promise<GitHubAppConfig> {
+    const res = await fetch(this.appUrl, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`Could not clear the GitHub settings (${res.status}).`);
+    return (await res.json()) as GitHubAppConfig;
+  }
+
+  /** Points the space at a remote to sync with. */
+  async attachRemote(remote: string): Promise<GitStatus> {
+    const res = await fetch(`${this.baseUrl}/setup`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ remote }),
+    });
+    if (!res.ok) throw new Error((await res.text()) || `Could not connect (${res.status}).`);
+    this.#git = (await res.json()) as GitStatus;
+    return this.#git;
+  }
 
   get status(): SyncStatus {
     return this.#status;

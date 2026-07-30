@@ -47,11 +47,39 @@ export class HttpSpace implements SpaceApi {
   /** Last revision seen per page, used for conflict detection on write. */
   #revisions = new Map<string, string>();
 
-  constructor(private readonly baseUrl = '/api/space') {}
+  constructor(
+    private readonly baseUrl = '/api/space',
+    /** Folders sit beside the space rather than under it: `/api/space/:name`
+     *  matches any path, so a nested route could never be reached. */
+    private readonly folderUrl = '/api/folders',
+  ) {}
 
   async list(): Promise<PageMeta[]> {
     const res = await this.#fetch('');
     return (await res.json()) as PageMeta[];
+  }
+
+  /**
+   * Every folder, including empty ones.
+   *
+   * Separate from `list()` because a folder is not a page and has no metadata
+   * to speak of. It lives on its own endpoint rather than being inferred from
+   * page names, which is the only way an empty one can be known about.
+   */
+  async folders(): Promise<string[]> {
+    const res = await fetch(this.folderUrl);
+    if (!res.ok) return [];
+    return (await res.json()) as string[];
+  }
+
+  async createFolder(name: string): Promise<string> {
+    const res = await fetch(this.folderUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: normalizePageName(name) }),
+    });
+    if (!res.ok) throw new SpaceError((await res.text()) || 'could not create the folder', res.status);
+    return ((await res.json()) as { name: string }).name;
   }
 
   async read(name: string): Promise<RevisionedPage> {

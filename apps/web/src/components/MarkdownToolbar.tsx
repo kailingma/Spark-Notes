@@ -1,4 +1,5 @@
 import type { SparkEditor } from '@spark/editor';
+import { useWindows } from '../windows/manager';
 
 /**
  * The mobile markdown keyboard row.
@@ -36,7 +37,10 @@ const KEYS: Key[] = [
   { label: '↹', title: 'Indent', apply: (e) => e.insertSnippet('  ') },
 ];
 
-export function MarkdownToolbar({ editor }: { editor: SparkEditor | null }) {
+export function MarkdownToolbar() {
+  // The editor in the focused tile. Asked for rather than passed down, because
+  // on a phone there is only ever one, and on anything wider this row is hidden.
+  const { activeEditor: editor } = useWindows();
   if (!editor) return null;
 
   const press = (key: Key) => (event: React.SyntheticEvent) => {

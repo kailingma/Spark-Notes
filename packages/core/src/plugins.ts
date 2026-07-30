@@ -151,6 +151,28 @@ export class PluginHost {
       markdown: {
         inline: (decorator) => track(workspace.registry.registerDecorator(id, decorator)),
       },
+      themes: {
+        register: (theme) => track(workspace.registry.registerTheme(id, theme)),
+        registerFonts: (pack) => track(workspace.registry.registerFontPack(id, pack)),
+        list: () => workspace.registry.themes(),
+        fontPacks: () => workspace.registry.fontPacks(),
+        // Through the getter, like `windows`: the shell installs itself after
+        // plugins have activated, and a plugin holding `spark` from activation
+        // must still reach the real one later.
+        active: () => workspace.themes.active(),
+        scheme: () => workspace.themes.scheme(),
+        use: (themeId) => workspace.themes.use(themeId),
+      },
+      windows: {
+        register: (view) => track(workspace.registry.registerView(id, view)),
+        // Read through the getter on every call: the workbench installs itself
+        // after plugins have activated, and a plugin that captured `spark` at
+        // activation must still reach the real one later.
+        open: (viewId, options) => workspace.windows.open(viewId, options),
+        close: (instanceId) => workspace.windows.close(instanceId),
+        move: (instanceId, mode) => workspace.windows.move(instanceId, mode),
+        visible: () => workspace.windows.visible(),
+      },
       events: {
         on: (event, fn) => track(workspace.events.on(event, fn)),
         emit: (event, payload) => workspace.events.emit(event, payload),

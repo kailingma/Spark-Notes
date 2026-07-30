@@ -7,6 +7,9 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 3000,
+    // Bind all interfaces so the dev server is reachable from other devices
+    // on the network, not just localhost.
+    host: true,
     // The client talks to the server on the same origin in production; in dev
     // Vite forwards the API so nothing has to know which mode it's in.
     proxy: {

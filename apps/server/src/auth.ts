@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { config, githubAuthEnabled } from './config.js';
+import { config } from './config.js';
+import { callbackUrl, githubSettings } from './github-settings.js';
 
 /**
  * GitHub connection state.
@@ -98,9 +99,10 @@ export class AuthStore {
 }
 
 export function authorizeUrl(state: string): string {
+  const app = githubSettings.get();
   const params = new URLSearchParams({
-    client_id: config.github.clientId,
-    redirect_uri: `${config.github.origin}/api/auth/github/callback`,
+    client_id: app.clientId,
+    redirect_uri: callbackUrl(app),
     // `repo` is what sync needs; nothing broader is requested.
     scope: 'repo',
     state,
@@ -109,16 +111,20 @@ export function authorizeUrl(state: string): string {
 }
 
 export async function exchangeCode(code: string): Promise<string> {
-  if (!githubAuthEnabled()) throw new Error('GitHub OAuth is not configured on this server.');
+  if (!githubSettings.enabled()) {
+    throw new Error('GitHub sign-in is not set up. Add a client ID and secret in Settings → Sync.');
+  }
 
+  const app = githubSettings.get();
   const res = await fetch('https://github.com/login/oauth/access_token', {
     method: 'POST',
     headers: { accept: 'application/json', 'content-type': 'application/json' },
     body: JSON.stringify({
-      client_id: config.github.clientId,
-      client_secret: config.github.clientSecret,
+      client_id: app.clientId,
+      client_secret: app.clientSecret,
       code,
-      redirect_uri: `${config.github.origin}/api/auth/github/callback`,
+      // Must match the authorize call byte for byte, so it is built the same way.
+      redirect_uri: callbackUrl(app),
     }),
   });
 

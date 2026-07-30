@@ -1,9 +1,10 @@
 import { useApp } from '../app-context';
+import { useWindows } from '../windows/manager';
 import type { SaveState } from './Editor';
 
 interface StatusBarProps {
-  saveState: SaveState;
-  words: number;
+  /** False on virtual pages, which have nothing to save and nothing to count. */
+  showDocumentState: boolean;
   onOpenSync: () => void;
 }
 
@@ -14,20 +15,36 @@ interface StatusBarProps {
  * of it there is, and which mode sync is in. Anything that needs a decision
  * lives in a dialog instead.
  */
-export function StatusBar({ saveState, words, onOpenSync }: StatusBarProps) {
-  const { sync, config, route } = useApp();
+export function StatusBar({ showDocumentState, onOpenSync }: StatusBarProps) {
+  const { sync, config } = useApp();
+  // The focused tile speaks for the bar. Which one that is belongs to the
+  // workbench, so the bar asks rather than being told by a parent that would
+  // have to track it too.
+  const { status, layout } = useWindows();
+  const { saveState, words } = status;
+
+  // Only the `window` surface is counted. A modal is not an arrangement you
+  // might forget you left open — it is in front of you, and it is going away.
+  const openWindows = layout.windows.filter((entry) => entry.surface === 'window').length;
 
   return (
     <div className="statusbar">
-      <span>{SAVE_LABEL[saveState]}</span>
-
-      {route.kind !== 'tasks' && (
-        <span>
-          {words.toLocaleString()} word{words === 1 ? '' : 's'}
-        </span>
+      {showDocumentState && (
+        <>
+          <span>{SAVE_LABEL[saveState]}</span>
+          <span>
+            {words.toLocaleString()} word{words === 1 ? '' : 's'}
+          </span>
+        </>
       )}
 
       <span className="statusbar-spacer" />
+
+      {openWindows > 0 && (
+        <span>
+          {openWindows} window{openWindows === 1 ? '' : 's'}
+        </span>
+      )}
 
       {config.user && <span>{config.user.login}</span>}
 

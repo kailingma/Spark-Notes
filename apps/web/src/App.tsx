@@ -1,46 +1,70 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isValidPageName, normalizePageName, pageBasename } from '@spark/core';
-import type { SparkEditor } from '@spark/editor';
 import { useApp } from './app-context';
 import { Capture } from './components/Capture';
 import { CommandPalette } from './components/CommandPalette';
-import { Editor, type SaveState } from './components/Editor';
 import {
-  MenuIcon,
+  CaptureIcon,
   MoonIcon,
   PlusIcon,
   SearchIcon,
+  SettingsIcon,
+  SidebarCloseIcon,
+  SidebarOpenIcon,
   SparkIcon,
+  SplitIcon,
   SunIcon,
+  SystemThemeIcon,
   TaskIcon,
 } from './components/Icons';
 import { MarkdownToolbar } from './components/MarkdownToolbar';
 import { Dialogs, Toasts } from './components/Overlays';
-import { Sidebar } from './components/Sidebar';
 import { StatusBar } from './components/StatusBar';
 import { SyncPanel, SyncPrompt } from './components/SyncPanel';
-import { TasksView } from './components/TasksView';
-import { useIsNarrow, useIsTouchFirst } from './lib/device';
+import type { ThemeMode } from './lib/appearance';
+import { modKey, useIsNarrow, useIsTouchFirst } from './lib/device';
 import { dailyPageName } from './lib/modes';
+import { forgetCachedPage } from './lib/page-cache';
+import { SPARK_PAGE, resolveVirtualPage } from './virtual';
+import { useWindows } from './windows/manager';
+import { Workbench } from './windows/Workbench';
+import { SETTINGS_VIEW } from './windows/views';
 
-type Theme = 'system' | 'light' | 'dark';
+/** What the theme button says it is on, in words rather than an enum member. */
+const THEME_LABEL: Record<ThemeMode, string> = {
+  system: 'Theme: following the system',
+  light: 'Theme: light',
+  dark: 'Theme: dark',
+};
 
+/**
+ * The shell.
+ *
+ * A header, the workbench, a status bar, and the overlays that belong to the
+ * whole app rather than to any one view. Everything that used to be "the page
+ * on screen" now lives in the workbench, so this file is back to what it should
+ * be: chrome, commands and keys.
+ */
 export function App() {
-  const { workspace, ready, route, navigate, openPage, toast, refreshPages } = useApp();
+  const {
+    workspace,
+    ready,
+    route,
+    toast,
+    refreshPages,
+    appearance,
+    setAppearance,
+    preferences,
+  } = useApp();
+
+  const { openPage, openView, layout, toggleNavigator, splitFocused, status, classic } =
+    useWindows();
 
   const narrow = useIsNarrow();
   const touchFirst = useIsTouchFirst();
 
-  const [editor, setEditor] = useState<SparkEditor | null>(null);
-  const [saveState, setSaveState] = useState<SaveState>('saved');
-  const [words, setWords] = useState(0);
-
-  const [sidebarOpen, setSidebarOpen] = useState(() =>
-    workspace.settings.get('app.sidebar', false),
-  );
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
-  const [theme, setTheme] = useState<Theme>(() => workspace.settings.get('app.theme', 'system'));
 
   // On a phone the app opens straight into capture; on a desktop it opens into
   // the editor. Same app, different first move.
@@ -51,69 +75,88 @@ export function App() {
     if (!ready || decidedLaunch.current) return;
     decidedLaunch.current = true;
     // Only on a bare launch — a link straight to a page is a request to read it.
-    if (touchFirst && route.kind === 'home') setCaptureOpen(true);
-  }, [ready, touchFirst, route.kind]);
+    if (touchFirst && preferences.captureOnLaunch && route.kind === 'home') setCaptureOpen(true);
+  }, [ready, touchFirst, route.kind, preferences.captureOnLaunch]);
 
   // -- theme ----------------------------------------------------------------
+  //
+  // The header button cycles; the settings panel picks. Both write through the
+  // same `setAppearance`, which owns the document element.
 
-  useEffect(() => {
-    workspace.settings.set('app.theme', theme);
-    if (theme === 'system') delete document.documentElement.dataset.theme;
-    else document.documentElement.dataset.theme = theme;
-  }, [workspace, theme]);
+  const theme = appearance.theme;
 
   const cycleTheme = useCallback(() => {
-    setTheme((current) =>
-      current === 'system' ? 'light' : current === 'light' ? 'dark' : 'system',
-    );
-  }, []);
+    setAppearance({
+      theme: theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system',
+    });
+  }, [theme, setAppearance]);
 
-  // -- current page ---------------------------------------------------------
+  // -- what the header is about ---------------------------------------------
+  //
+  // The focused document, which the workbench reports. With two notes tiled the
+  // header names the one you are typing in, and there is no second title bar to
+  // disagree with it because each tile labels itself on its own tab.
 
-  // Home is today's page. It's usually empty, which is exactly the blank
-  // editor we want to open into — but anything typed lands somewhere real.
-  const page = useMemo(
-    () => (route.kind === 'page' ? route.page : dailyPageName()),
-    [route],
-  );
-
-  useEffect(() => {
-    const off = workspace.editor.onChange((text) => setWords(countWords(text)));
-    setWords(countWords(workspace.editor.text()));
-    return off;
-  }, [workspace, page]);
-
-  useEffect(() => {
-    workspace.settings.set('app.sidebar', sidebarOpen);
-  }, [workspace, sidebarOpen]);
+  const page = status.page ?? dailyPageName();
+  const virtual = useMemo(() => resolveVirtualPage(page), [page]);
 
   // -- page actions ---------------------------------------------------------
 
   const newPage = useCallback(async () => {
     const name = await workspace.ui.prompt('New page', '');
     if (!name) return;
+
     const clean = normalizePageName(name);
     if (!isValidPageName(clean)) {
       toast('That page name has characters that will not work on disk.', 'error');
       return;
     }
-    openPage(clean);
-  }, [workspace, openPage, toast]);
+
+    if (resolveVirtualPage(clean)) {
+      toast(`"${clean}" is a built-in view, so it can't be a page.`, 'error');
+      return;
+    }
+
+    try {
+      // Create it for real, with a heading, rather than just navigating to a
+      // name. A page you asked for should exist — appear in the list, be
+      // linkable — before you have typed anything into it. Use `''` as the
+      // base revision so an existing page is never overwritten.
+      if (await workspace.space.exists(clean)) {
+        toast(`"${clean}" already exists — opening it.`, 'info');
+        openPage(clean);
+        return;
+      }
+
+      await workspace.space.write(clean, `# ${pageBasename(clean)}\n\n`, '');
+      await refreshPages();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), 'error');
+      return;
+    }
+
+    // Land under the title rather than on it. The heading is already written;
+    // what you came here to do is type the next line.
+    openPage(clean, { line: 1 });
+  }, [workspace, openPage, refreshPages, toast]);
 
   const renamePage = useCallback(async () => {
+    if (virtual) return;
     const next = await workspace.ui.prompt('Rename page', page);
     if (!next) return;
     const clean = normalizePageName(next);
     if (!isValidPageName(clean) || clean === page) return;
     try {
       await workspace.space.rename(page, clean);
+      // The old name's cached text is now a page that does not exist.
+      forgetCachedPage(page);
       await refreshPages();
       openPage(clean);
       toast('Renamed.', 'success');
     } catch (err) {
       toast(err instanceof Error ? err.message : String(err), 'error');
     }
-  }, [workspace, page, refreshPages, openPage, toast]);
+  }, [workspace, page, virtual, refreshPages, openPage, toast]);
 
   const deletePage = useCallback(async () => {
     const confirmed = await workspace.ui.select(`Delete “${page}”?`, ['Delete', 'Cancel']);
@@ -122,12 +165,12 @@ export function App() {
       await workspace.space.delete(page);
       workspace.events.emit('page:delete', { page });
       await refreshPages();
-      navigate({ kind: 'home' });
+      openPage(dailyPageName());
       toast('Deleted.', 'success');
     } catch (err) {
       toast(err instanceof Error ? err.message : String(err), 'error');
     }
-  }, [workspace, page, refreshPages, navigate, toast]);
+  }, [workspace, page, refreshPages, openPage, toast]);
 
   // -- app commands, registered like any plugin's ---------------------------
 
@@ -146,7 +189,13 @@ export function App() {
         name: 'Open tasks',
         category: 'Spark',
         key: 'Mod-Shift-t',
-        run: () => navigate({ kind: 'tasks' }),
+        run: () => openPage('Tasks'),
+      }),
+      registry.registerCommand('app', {
+        id: 'app.tags',
+        name: 'Browse tags',
+        category: 'Spark',
+        run: () => openPage('Tags'),
       }),
       registry.registerCommand('app', {
         id: 'app.today',
@@ -158,28 +207,22 @@ export function App() {
         id: 'app.newPage',
         name: 'New page',
         category: 'Spark',
+        key: 'Mod-Shift-n',
         run: () => void newPage(),
       }),
       registry.registerCommand('app', {
         id: 'app.renamePage',
         name: 'Rename page',
         category: 'Spark',
-        available: () => route.kind !== 'tasks',
+        available: () => virtual === null,
         run: () => void renamePage(),
       }),
       registry.registerCommand('app', {
         id: 'app.deletePage',
         name: 'Delete page',
         category: 'Spark',
-        available: () => route.kind !== 'tasks',
+        available: () => virtual === null,
         run: () => void deletePage(),
-      }),
-      registry.registerCommand('app', {
-        id: 'app.sidebar',
-        name: 'Toggle page list',
-        category: 'Spark',
-        key: 'Mod-\\',
-        run: () => setSidebarOpen((open) => !open),
       }),
       registry.registerCommand('app', {
         id: 'app.theme',
@@ -188,14 +231,79 @@ export function App() {
         run: cycleTheme,
       }),
       registry.registerCommand('app', {
+        id: 'app.settings',
+        name: 'Settings',
+        category: 'Spark',
+        key: 'Mod-,',
+        run: () => {
+          openView(SETTINGS_VIEW, { mode: 'modal' });
+        },
+      }),
+      registry.registerCommand('app', {
         id: 'app.sync',
         name: 'Sync settings',
         category: 'Spark',
         run: () => setSyncOpen(true),
       }),
+
+      // -- the workbench ---------------------------------------------------
+      registry.registerCommand('app', {
+        id: 'window.navigator',
+        name: 'Toggle navigator',
+        category: 'Window',
+        key: 'Mod-\\',
+        run: toggleNavigator,
+      }),
+      registry.registerCommand('app', {
+        id: 'window.spark',
+        name: classic ? 'Ask Spark' : 'Ask Spark beside this page',
+        category: 'Window',
+        key: 'Mod-Shift-a',
+        // Classic mode sends Spark to the right rail; `openPage` knows that, so
+        // the split it would otherwise ask for is simply not requested.
+        run: () => openPage(SPARK_PAGE, classic ? {} : { mode: 'split-right' }),
+      }),
+
+      // The arranging commands only exist where there is something to arrange.
+      // A palette entry that silently does nothing is worse than a missing one.
+      ...(classic
+        ? []
+        : [
+            registry.registerCommand('app', {
+              id: 'window.splitRight',
+              name: 'Split right',
+              category: 'Window',
+              run: () => splitFocused('right'),
+            }),
+            registry.registerCommand('app', {
+              id: 'window.splitDown',
+              name: 'Split down',
+              category: 'Window',
+              run: () => splitFocused('bottom'),
+            }),
+            registry.registerCommand('app', {
+              id: 'window.float',
+              name: 'Open this page in a window',
+              category: 'Window',
+              run: () => openPage(page, { mode: 'window' }),
+            }),
+          ]),
     ];
     return () => off.forEach((dispose) => dispose());
-  }, [workspace, navigate, openPage, newPage, renamePage, deletePage, cycleTheme, route.kind]);
+  }, [
+    workspace,
+    openPage,
+    openView,
+    newPage,
+    renamePage,
+    deletePage,
+    cycleTheme,
+    virtual,
+    toggleNavigator,
+    splitFocused,
+    page,
+    classic,
+  ]);
 
   // -- global shortcuts -----------------------------------------------------
 
@@ -208,6 +316,9 @@ export function App() {
       if (event.key === 'Escape') {
         setPaletteOpen(false);
         setSyncOpen(false);
+        // Capture closes from here as well as from its own textarea, so the
+        // key works when focus is on the mode switcher or the save button.
+        setCaptureOpen(false);
         return;
       }
 
@@ -242,95 +353,115 @@ export function App() {
 
   // -- render ---------------------------------------------------------------
 
-  const showSidebar = sidebarOpen;
-  const title = route.kind === 'tasks' ? 'Tasks' : pageBasename(page);
+  const title = virtual ? virtual.title : pageBasename(page);
+  const navigatorOpen = layout.sidebars.left.open;
 
   return (
     <div className="app">
       <header className="header">
         <button
           className="icon-button"
-          onClick={() => setSidebarOpen((open) => !open)}
-          aria-label="Toggle page list"
-          aria-pressed={showSidebar}
+          onClick={toggleNavigator}
+          aria-label="Toggle navigator"
+          aria-pressed={navigatorOpen}
+          title="Toggle navigator"
         >
-          <MenuIcon />
+          {navigatorOpen ? <SidebarCloseIcon /> : <SidebarOpenIcon />}
         </button>
+
+        <span className="header-spacer" />
 
         <button
           className="header-title"
-          data-dirty={saveState === 'dirty' || saveState === 'saving'}
+          data-dirty={!virtual && (status.saveState === 'dirty' || status.saveState === 'saving')}
           onClick={() => void renamePage()}
-          title={route.kind === 'tasks' ? 'Tasks' : `${page} — click to rename`}
+          title={virtual ? virtual.title : `${page} — click to rename`}
         >
           {title}
         </button>
 
+        <span className="header-spacer" />
+
+        <button
+          className="icon-button"
+          onClick={() => void newPage()}
+          aria-label="New page"
+          title="New page"
+        >
+          <PlusIcon />
+        </button>
+        {/* Capture is the phone's launch surface, but the thought you need to
+            get down before it goes is not a property of the device you are
+            holding. It is one button at every width, and one key. */}
         <button
           className="icon-button"
           onClick={() => setCaptureOpen(true)}
           aria-label="Quick capture"
+          title={`Quick capture — ${modKey}⇧C`}
         >
-          <PlusIcon />
+          <CaptureIcon />
         </button>
+        {!narrow && (
+          <button
+            className="icon-button"
+            onClick={() => openPage(SPARK_PAGE, classic ? {} : { mode: 'split-right' })}
+            aria-label="Ask Spark"
+            title={classic ? 'Ask Spark, in the side panel' : 'Ask Spark, beside this page'}
+          >
+            <SparkIcon />
+          </button>
+        )}
         <button
           className="icon-button"
-          onClick={() => navigate({ kind: 'tasks' })}
+          onClick={() => openPage('Tasks')}
           aria-label="Tasks"
-          aria-pressed={route.kind === 'tasks'}
+          title="Tasks"
         >
           <TaskIcon />
         </button>
+        {!narrow && !classic && (
+          <button
+            className="icon-button"
+            onClick={() => splitFocused('right')}
+            aria-label="Split right"
+            title="Split right"
+          >
+            <SplitIcon />
+          </button>
+        )}
         <button
           className="icon-button"
           onClick={() => setPaletteOpen(true)}
           aria-label="Search pages and commands"
+          title="Search"
         >
           <SearchIcon />
         </button>
         <button
           className="icon-button"
-          onClick={cycleTheme}
-          aria-label={`Theme: ${theme}`}
-          title={`Theme: ${theme}`}
+          onClick={() => openView(SETTINGS_VIEW, { mode: 'modal' })}
+          aria-label="Settings"
+          title="Settings"
         >
-          {theme === 'dark' ? <MoonIcon /> : theme === 'light' ? <SunIcon /> : <SparkIcon />}
+          <SettingsIcon />
+        </button>
+        <button
+          className="icon-button"
+          onClick={cycleTheme}
+          aria-label={THEME_LABEL[theme]}
+          title={THEME_LABEL[theme]}
+        >
+          {theme === 'dark' ? <MoonIcon /> : theme === 'light' ? <SunIcon /> : <SystemThemeIcon />}
         </button>
       </header>
 
       <SyncPrompt onOpen={() => setSyncOpen(true)} />
 
-      <div className="app-body">
-        {showSidebar && (
-          <>
-            <Sidebar onNavigate={narrow ? () => setSidebarOpen(false) : undefined} />
-            {narrow && <div className="scrim" onClick={() => setSidebarOpen(false)} />}
-          </>
-        )}
+      <Workbench />
 
-        <main className="main">
-          {route.kind === 'tasks' ? (
-            <TasksView />
-          ) : (
-            <Editor
-              page={page}
-              autofocus={!touchFirst}
-              onEditor={setEditor}
-              onSaveState={setSaveState}
-            />
-          )}
+      {narrow && !virtual && <MarkdownToolbar />}
 
-          {route.kind !== 'tasks' && words === 0 && !narrow && (
-            <p className="empty-hint">
-              <kbd>⌘K</kbd> to search · <kbd>/</kbd> for commands · just start typing
-            </p>
-          )}
-        </main>
-      </div>
-
-      {narrow && route.kind !== 'tasks' && <MarkdownToolbar editor={editor} />}
-
-      <StatusBar saveState={saveState} words={words} onOpenSync={() => setSyncOpen(true)} />
+      <StatusBar showDocumentState={!virtual} onOpenSync={() => setSyncOpen(true)} />
 
       {captureOpen && <Capture onClose={() => setCaptureOpen(false)} />}
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
@@ -369,10 +500,4 @@ function describeKeyEvent(event: KeyboardEvent): string {
   ]
     .filter(Boolean)
     .join('-');
-}
-
-function countWords(text: string): number {
-  const trimmed = text.trim();
-  if (!trimmed) return 0;
-  return trimmed.split(/\s+/).length;
 }

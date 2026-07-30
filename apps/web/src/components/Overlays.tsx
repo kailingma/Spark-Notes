@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useApp } from '../app-context';
+import { ActionDialog } from './ActionDialog';
 
 /** Transient messages. Errors linger; everything else gets out of the way. */
 export function Toasts() {
@@ -23,10 +24,12 @@ export function Toasts() {
 }
 
 /**
- * The modal behind `spark.ui.prompt()` and `spark.ui.select()`.
+ * The action dialogs behind `spark.ui.prompt()` and `spark.ui.select()`.
  *
  * Plugins get a real dialog instead of `window.prompt`, which is blocking,
- * unstyleable, and silently disabled in some browsers.
+ * unstyleable, and silently disabled in some browsers. Both are *questions*
+ * raised by something you did, not places you went — see `ActionDialog`, which
+ * owns everything they have in common with the sync panel.
  */
 export function Dialogs() {
   const { dialog, resolveDialog } = useApp();
@@ -38,54 +41,47 @@ export function Dialogs() {
 
   if (!dialog) return null;
 
-  return (
-    <div className="overlay" onMouseDown={() => resolveDialog(null)}>
-      <div
-        className="dialog"
-        role="dialog"
-        aria-label={dialog.message}
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <h2>{dialog.message}</h2>
+  if (dialog.kind === 'select') {
+    return (
+      <ActionDialog title={dialog.message} onClose={() => resolveDialog(null)}>
+        <ul className="palette-list">
+          {dialog.options.map((option) => (
+            <li key={option}>
+              <button className="palette-item" onClick={() => resolveDialog(option)}>
+                {option}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </ActionDialog>
+    );
+  }
 
-        {dialog.kind === 'prompt' ? (
-          <>
-            <input
-              className="field"
-              autoFocus
-              value={value}
-              onChange={(event) => setValue(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') resolveDialog(value);
-                if (event.key === 'Escape') resolveDialog(null);
-              }}
-              aria-label={dialog.message}
-            />
-            <div className="dialog-actions">
-              <button className="button" data-variant="ghost" onClick={() => resolveDialog(null)}>
-                Cancel
-              </button>
-              <button
-                className="button"
-                data-variant="primary"
-                onClick={() => resolveDialog(value)}
-              >
-                OK
-              </button>
-            </div>
-          </>
-        ) : (
-          <ul className="palette-list">
-            {dialog.options.map((option) => (
-              <li key={option}>
-                <button className="palette-item" onClick={() => resolveDialog(option)}>
-                  {option}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </div>
+  return (
+    <ActionDialog
+      title={dialog.message}
+      onClose={() => resolveDialog(null)}
+      actions={
+        <>
+          <button className="button" data-variant="ghost" onClick={() => resolveDialog(null)}>
+            Cancel
+          </button>
+          <button className="button" data-variant="primary" onClick={() => resolveDialog(value)}>
+            OK
+          </button>
+        </>
+      }
+    >
+      <input
+        className="field"
+        autoFocus
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') resolveDialog(value);
+        }}
+        aria-label={dialog.message}
+      />
+    </ActionDialog>
   );
 }

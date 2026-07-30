@@ -59,10 +59,10 @@ export function TasksView() {
   };
 
   return (
-    <div className="tasks">
-      <div className="tasks-inner">
+    <div className="listing">
+      <div className="listing-inner">
         <h1>Tasks</h1>
-        <p className="tasks-sub">
+        <p className="listing-sub">
           {openCount === 0
             ? 'Nothing open. Anything you write as “- [ ] …” shows up here.'
             : `${openCount} open across ${new Set(tasks.map((t) => t.page)).size} page${
@@ -70,7 +70,7 @@ export function TasksView() {
               }`}
         </p>
 
-        <div className="tasks-filters">
+        <div className="listing-filters">
           {(['open', 'done', 'all'] as Filter[]).map((option) => (
             <button
               key={option}
@@ -99,8 +99,8 @@ export function TasksView() {
           <p className="palette-empty">Nothing here.</p>
         ) : (
           groups.map(([title, groupTasks]) => (
-            <section className="tasks-group" key={title}>
-              <h2 className="tasks-group-title">{title}</h2>
+            <section className="listing-group" key={title}>
+              <h2 className="listing-group-title">{title}</h2>
               {groupTasks.map((task) => (
                 <div className="task" key={task.id} data-done={task.done}>
                   <input
@@ -113,7 +113,10 @@ export function TasksView() {
                   <div className="task-text">
                     <div>{task.text || '(empty task)'}</div>
                     <div className="task-meta">
-                      <button className="task-source" onClick={() => openPage(task.page)}>
+                      <button
+                        className="task-source"
+                        onClick={() => openPage(task.page, task.line)}
+                      >
                         {task.page}
                       </button>
                       {task.due !== undefined && (

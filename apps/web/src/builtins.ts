@@ -1,4 +1,6 @@
 import { definePlugin, type PluginDefinition, type SparkApi } from '@spark/plugin-sdk';
+import { fontsPlugin } from './fonts';
+import { themesPlugin } from './themes';
 
 /**
  * Built-in plugins.
@@ -94,9 +96,14 @@ const aiPlugin = definePlugin({
   description: 'On-demand writing help. Never runs on its own.',
 
   activate(spark: SparkApi) {
+    /**
+     * AI commands stay listed in the palette even with no key configured.
+     * Hiding them made the feature undiscoverable — you cannot tell a missing
+     * feature from an unconfigured one. Listed-but-explaining is honest.
+     */
     const requireAi = (): boolean => {
       if (spark.ai.available()) return true;
-      spark.ui.toast('AI is off. Set ANTHROPIC_API_KEY on the server to turn it on.', 'error');
+      spark.ui.toast('AI is off. Add a provider and key in Settings → AI.', 'error');
       return false;
     };
 
@@ -125,7 +132,6 @@ const aiPlugin = definePlugin({
       name: 'Continue writing',
       category: 'AI',
       key: 'Mod-Shift-Enter',
-      available: () => spark.ai.available(),
       run: async () => {
         if (!requireAi()) return;
         const before = spark.editor.text().slice(0, spark.editor.selection().from);
@@ -143,7 +149,6 @@ const aiPlugin = definePlugin({
       id: 'ai.rewrite',
       name: 'Tidy up selection',
       category: 'AI',
-      available: () => spark.ai.available() && spark.editor.selectedText().length > 0,
       run: async () => {
         if (!requireAi()) return;
         const selected = spark.editor.selectedText();
@@ -171,7 +176,6 @@ const aiPlugin = definePlugin({
       id: 'ai.ask',
       name: 'Ask about this page',
       category: 'AI',
-      available: () => spark.ai.available(),
       run: async () => {
         if (!requireAi()) return;
         const question = await spark.ui.prompt('Ask about this page');
@@ -197,4 +201,15 @@ const aiPlugin = definePlugin({
   },
 });
 
-export const builtinPlugins: PluginDefinition[] = [markdownPlugin, aiPlugin];
+/**
+ * Fonts before themes, because that is the order the settings panel lists them
+ * in — a theme names the pack it wants by id, and *that* is resolved when the
+ * stylesheet is built rather than when either one registers, so a slow plugin
+ * cannot leave a theme without its typography.
+ */
+export const builtinPlugins: PluginDefinition[] = [
+  markdownPlugin,
+  aiPlugin,
+  fontsPlugin,
+  themesPlugin,
+];

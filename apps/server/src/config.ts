@@ -30,6 +30,28 @@ function repoRoot(): string {
 const ROOT = repoRoot();
 
 /**
+ * Loads `.env` from the repository root, if there is one.
+ *
+ * Anchored to `ROOT` for the same reason everything else here is: npm runs
+ * workspace scripts from inside `apps/server`, so a path relative to the
+ * working directory would look for the file in the wrong place.
+ *
+ * Node's own loader is used rather than a dependency, and it has the
+ * precedence everyone expects: a variable already set in the real environment
+ * wins, so `PORT=4000 npm run dev` still overrides the file. A missing file is
+ * not a problem to report — a fresh clone is meant to run with nothing set up.
+ */
+function loadDotEnv(): void {
+  try {
+    process.loadEnvFile(resolve(ROOT, '.env'));
+  } catch {
+    /* no .env, or an unreadable one: defaults and the real environment stand */
+  }
+}
+
+loadDotEnv();
+
+/**
  * All configuration comes from the environment, with defaults that let
  * `npm run dev` work in a fresh clone with nothing set up.
  */
@@ -44,10 +66,54 @@ export const config = {
 
   spaceName: process.env.SPARK_SPACE_NAME ?? 'Spark',
 
-  /** Anthropic API key. Absent means AI features are simply off. */
-  anthropicKey: process.env.ANTHROPIC_API_KEY ?? '',
-  aiModel: process.env.SPARK_AI_MODEL ?? 'claude-opus-5',
+  /**
+   * AI defaults from the environment.
+   *
+   * These are only a starting point: whatever is saved from the settings page
+   * lands in `.spark/ai.json` and takes precedence, so a server can be handed a
+   * key at boot *or* configured from the app, and neither way surprises the
+   * other. Nothing set here means AI features are simply off.
+   */
+  ai: {
+    provider: process.env.SPARK_AI_PROVIDER ?? '',
+    anthropicKey: process.env.ANTHROPIC_API_KEY ?? '',
+    openaiKey: process.env.OPENAI_API_KEY ?? '',
+    model: process.env.SPARK_AI_MODEL ?? '',
+    /** Base URL, for OpenAI-compatible servers: OpenRouter, Ollama, vLLM… */
+    endpoint: process.env.SPARK_AI_ENDPOINT ?? process.env.OPENAI_BASE_URL ?? '',
 
+    /** Embedding model for semantic search. Empty means text matching only. */
+    embedModel: process.env.SPARK_EMBED_MODEL ?? '',
+    /** Where to send embeddings, when it is not the same place as the chat. */
+    embedEndpoint: process.env.SPARK_EMBED_ENDPOINT ?? '',
+  },
+
+  /**
+   * The code sandbox.
+   *
+   * Off unless a runtime is named, and named here rather than in the settings
+   * file on purpose: switching on code execution is a decision about the machine
+   * the server runs on, not a preference of whoever is using the app, and it
+   * should take a deliberate edit to a file or an environment variable rather
+   * than a toggle anybody can find. See `sandbox.ts` for what each runtime
+   * actually isolates.
+   */
+  sandbox: {
+    /** `off` | `docker` | `node` | `python` | a command of your own. */
+    runtime: process.env.SPARK_SANDBOX ?? 'off',
+    /** Docker image. Empty means a small official one per language. */
+    image: process.env.SPARK_SANDBOX_IMAGE ?? '',
+    timeoutMs: Number(process.env.SPARK_SANDBOX_TIMEOUT ?? 20_000),
+  },
+
+  /**
+   * GitHub OAuth defaults from the environment.
+   *
+   * Only a starting point, like the AI settings above: whatever is saved from
+   * Settings → Sync lands in `.spark/github.json` and takes precedence. Read
+   * through `github-settings.ts`, never directly — it is the one place that
+   * knows which of the two is in force.
+   */
   github: {
     clientId: process.env.GITHUB_CLIENT_ID ?? '',
     clientSecret: process.env.GITHUB_CLIENT_SECRET ?? '',
@@ -67,6 +133,3 @@ export const config = {
   webDist: resolve(ROOT, process.env.SPARK_WEB_DIST ?? 'apps/web/dist'),
 } as const;
 
-export const aiEnabled = (): boolean => config.anthropicKey.length > 0;
-export const githubAuthEnabled = (): boolean =>
-  config.github.clientId.length > 0 && config.github.clientSecret.length > 0;

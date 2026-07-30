@@ -13,7 +13,7 @@ import {
 } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
-import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
+import { search, searchKeymap } from '@codemirror/search';
 import { Compartment, EditorState, type Extension } from '@codemirror/state';
 import {
   EditorView,
@@ -32,6 +32,7 @@ import type {
 } from '@spark/plugin-sdk';
 import { slashCompletion, wikiLinkCompletion } from './completions.js';
 import { livePreview, livePreviewConfig } from './live-preview.js';
+import { marginMetrics } from './metrics.js';
 import { sparkMarkdownExtensions } from './markdown-extensions.js';
 import {
   continueList,
@@ -55,6 +56,8 @@ export interface SparkEditorOptions {
   onSave?: () => void;
   onWikiLink?: (target: string) => void;
   onLink?: (url: string) => void;
+  /** Called when a `#tag` is clicked. */
+  onTag?: (tag: string) => void;
   /** Slash commands offered in the `/` menu. */
   slashCommands?: () => SlashCommand[];
   /** Invoked when a slash command is chosen. */
@@ -65,7 +68,31 @@ export interface SparkEditorOptions {
   pages?: () => string[];
   /** Start with the cursor in the document. */
   autofocus?: boolean;
+  /** Typing behaviours the settings panel can turn off. */
+  behaviour?: Partial<EditorBehaviour>;
 }
+
+/**
+ * The typing behaviours that are a matter of taste rather than of correctness.
+ *
+ * Held in a compartment so changing one takes effect in every open editor
+ * immediately: rebuilding the view instead would drop the cursor, and a setting
+ * that costs you your place is a setting nobody touches twice.
+ */
+export interface EditorBehaviour {
+  /** Return inside a list carries the marker onto the next line. */
+  continueLists: boolean;
+  /** Brackets and quotes close themselves, and wrap the selection. */
+  autoPairs: boolean;
+  /** The browser's own spelling underline. */
+  spellcheck: boolean;
+}
+
+const DEFAULT_BEHAVIOUR: EditorBehaviour = {
+  continueLists: true,
+  autoPairs: true,
+  spellcheck: true,
+};
 
 /**
  * A mounted markdown editor.
@@ -80,11 +107,14 @@ export class SparkEditor implements EditorApi {
   #page: string | null;
   #changeHandlers = new Set<(text: string) => void>();
   #keymapCompartment = new Compartment();
+  #behaviourCompartment = new Compartment();
+  #behaviour: EditorBehaviour;
   #options: SparkEditorOptions;
 
   constructor(options: SparkEditorOptions) {
     this.#options = options;
     this.#page = options.page ?? null;
+    this.#behaviour = { ...DEFAULT_BEHAVIOUR, ...options.behaviour };
 
     this.view = new EditorView({
       parent: options.parent,
@@ -210,6 +240,23 @@ export class SparkEditor implements EditorApi {
     toggleTaskLine(this.view);
   }
 
+  /**
+   * Puts the cursor on a zero-based line and scrolls it into view, centred.
+   *
+   * Used when you arrive at a page from somewhere that pointed at a specific
+   * line — a task on the Tasks page, a backlink — where landing at the top and
+   * leaving you to find it would defeat the point of the link.
+   */
+  goToLine(line: number): void {
+    const clamped = clamp(line + 1, 1, this.view.state.doc.lines);
+    const target = this.view.state.doc.line(clamped);
+    this.view.dispatch({
+      selection: { anchor: target.from },
+      effects: EditorView.scrollIntoView(target.from, { y: 'center' }),
+    });
+    this.view.focus();
+  }
+
   /** Appends text at the end of the document, adding a blank line if needed. */
   append(text: string): void {
     const doc = this.view.state.doc;
@@ -243,8 +290,7 @@ export class SparkEditor implements EditorApi {
       drawSelection(),
       dropCursor(),
       EditorView.lineWrapping,
-      closeBrackets(),
-      highlightSelectionMatches(),
+      this.#behaviourCompartment.of(this.#behaviourExtensions()),
 
       markdown({
         base: markdownLanguage,
@@ -254,13 +300,22 @@ export class SparkEditor implements EditorApi {
         addKeymap: false,
       }),
 
+      // `top: true` puts the find panel above the document; the theme floats it
+      // in the top-right corner rather than letting it push the text down.
+      search({ top: true }),
+
       livePreviewConfig.of({
         onWikiLink: options.onWikiLink,
         onLink: options.onLink,
+        onTag: options.onTag,
         decorators: options.decorators,
         page: () => this.#page,
       }),
       livePreview,
+      // Measures what the margin outdents have to match. Must be in the
+      // extension set for headings and lists to line up on the first paint
+      // after a font change.
+      marginMetrics,
 
       sparkTheme,
       sparkHighlighting,
@@ -290,6 +345,41 @@ export class SparkEditor implements EditorApi {
         const text = update.state.doc.toString();
         options.onChange?.(text);
         this.#notifyChange(text);
+      }),
+    ];
+  }
+
+  /**
+   * Applies new typing behaviours to the live view.
+   *
+   * Both compartments are reconfigured, because two of the three settings are
+   * partly keybindings: auto-pairing is an extension *and* a keymap, and list
+   * continuation is only a keymap.
+   */
+  setBehaviour(behaviour: Partial<EditorBehaviour>): void {
+    const next = { ...this.#behaviour, ...behaviour };
+    if (
+      next.continueLists === this.#behaviour.continueLists &&
+      next.autoPairs === this.#behaviour.autoPairs &&
+      next.spellcheck === this.#behaviour.spellcheck
+    ) {
+      return;
+    }
+
+    this.#behaviour = next;
+    this.view.dispatch({
+      effects: [
+        this.#behaviourCompartment.reconfigure(this.#behaviourExtensions()),
+        this.#keymapCompartment.reconfigure(this.#keymap()),
+      ],
+    });
+  }
+
+  #behaviourExtensions(): Extension[] {
+    return [
+      this.#behaviour.autoPairs ? closeBrackets() : [],
+      EditorView.contentAttributes.of({
+        spellcheck: String(this.#behaviour.spellcheck),
       }),
     ];
   }
@@ -324,8 +414,9 @@ export class SparkEditor implements EditorApi {
       })),
       { key: 'Mod-0', run: () => (setHeadingLevel(view(), 0), true) },
 
-      // Lists.
-      { key: 'Enter', run: continueList },
+      // Lists. Without the setting, Enter falls through to the default keymap,
+      // which inserts a plain newline.
+      ...(this.#behaviour.continueLists ? [{ key: 'Enter', run: continueList }] : []),
       {
         key: 'Tab',
         run: (target) =>
@@ -347,7 +438,7 @@ export class SparkEditor implements EditorApi {
         },
       },
 
-      ...closeBracketsKeymap,
+      ...(this.#behaviour.autoPairs ? closeBracketsKeymap : []),
       ...completionKeymap,
       ...searchKeymap,
       ...historyKeymap,

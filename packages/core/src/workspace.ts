@@ -1,4 +1,4 @@
-import type { PluginDefinition, UiApi } from '@spark/plugin-sdk';
+import type { PluginDefinition, ThemeScheme, UiApi, WindowsApi } from '@spark/plugin-sdk';
 import { AiClient } from './ai.js';
 import { EditorBridge } from './editor-bridge.js';
 import { EventBus } from './events.js';
@@ -21,6 +21,29 @@ export interface ServerConfig {
   githubAuth: boolean;
   /** Connected GitHub user, when there is one. */
   user?: { login: string; name?: string; avatar?: string };
+  /** True when an embedding model is named, so `find` can search by meaning. */
+  embeddings: boolean;
+  /**
+   * The code sandbox, when the server has one. Null is the ordinary state.
+   *
+   * The server decides this, not a preference: whether this machine will execute
+   * generated code is a property of the machine, so the UI can only report it.
+   */
+  sandbox: { runtime: string; describe: string } | null;
+}
+
+/**
+ * The half of theming that needs a live shell.
+ *
+ * Registering a theme goes through the registry and works before anything is on
+ * screen; *wearing* one is a question about the document element and the stored
+ * appearance, which only the shell knows about. Same split as `WindowsApi`, for
+ * the same reason.
+ */
+export interface ThemeHost {
+  active(): string;
+  scheme(): ThemeScheme;
+  use(themeId: string): void;
 }
 
 const DEFAULT_CONFIG: ServerConfig = {
@@ -28,6 +51,8 @@ const DEFAULT_CONFIG: ServerConfig = {
   ai: false,
   git: false,
   githubAuth: false,
+  embeddings: false,
+  sandbox: null,
 };
 
 /**
@@ -50,6 +75,8 @@ export class Workspace {
 
   #config: ServerConfig = DEFAULT_CONFIG;
   #ui: UiApi | null = null;
+  #windows: WindowsApi | null = null;
+  #themes: ThemeHost | null = null;
   #startup: Promise<void> | null = null;
 
   constructor(apiBase = '/api') {
@@ -75,6 +102,40 @@ export class Workspace {
 
   get ui(): UiApi {
     return this.#ui ?? fallbackUi;
+  }
+
+  /**
+   * The workbench installs itself here during mount, the same way the shell
+   * installs its UI. Registration of view *types* goes through the registry and
+   * works before the workbench exists; only opening one needs a live layout, so
+   * that is the half that falls back to a no-op.
+   */
+  setWindows(windows: WindowsApi): void {
+    this.#windows = windows;
+  }
+
+  get windows(): WindowsApi {
+    return this.#windows ?? this.#fallbackWindows;
+  }
+
+  #fallbackWindows: WindowsApi = {
+    register: (view) => this.registry.registerView('app', view),
+    open: (viewId) => {
+      console.info(`[spark] no workbench yet; cannot open "${viewId}"`);
+      return '';
+    },
+    close: () => {},
+    move: () => {},
+    visible: () => [],
+  };
+
+  /** Installed by the shell during mount, alongside the UI and the workbench. */
+  setThemes(themes: ThemeHost): void {
+    this.#themes = themes;
+  }
+
+  get themes(): ThemeHost {
+    return this.#themes ?? fallbackThemes;
   }
 
   /**
@@ -123,6 +184,16 @@ export class Workspace {
     this.#startup = null;
   }
 
+  /**
+   * Re-reads `/api/config`. Called after something server-side changes — an AI
+   * key being saved, GitHub being connected — so the app learns about a
+   * capability that appeared without needing a reload.
+   */
+  async refreshConfig(): Promise<ServerConfig> {
+    await this.#loadConfig();
+    return this.#config;
+  }
+
   async #loadConfig(): Promise<void> {
     try {
       const res = await fetch('/api/config');
@@ -133,6 +204,17 @@ export class Workspace {
     this.ai.setEnabled(this.#config.ai);
   }
 }
+
+/**
+ * Before the shell is up, a plugin can still ask what is worn — it just gets the
+ * honest answer that nothing has been resolved yet, rather than an exception on
+ * a line that only wanted to read a name.
+ */
+const fallbackThemes: ThemeHost = {
+  active: () => '',
+  scheme: () => 'light',
+  use: (themeId) => console.info(`[spark] no shell yet; cannot wear "${themeId}"`),
+};
 
 const fallbackUi: UiApi = {
   toast: (message) => console.info(`[spark] ${message}`),

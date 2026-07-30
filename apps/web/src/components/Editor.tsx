@@ -2,17 +2,18 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ConflictError, isValidPageName, normalizePageName } from '@spark/core';
 import type { SparkEditor } from '@spark/editor';
 import { useApp } from '../app-context';
-
-/** How long typing pauses before a save fires. */
-const AUTOSAVE_MS = 600;
+import { forgetCachedPage, readCachedPage, writeCachedPage } from '../lib/page-cache';
+import { tagPageName } from '../virtual';
 
 export type SaveState = 'saved' | 'dirty' | 'saving' | 'error';
 
 interface EditorProps {
   page: string;
   autofocus?: boolean;
-  onEditor: (editor: SparkEditor | null) => void;
+  onEditor?: (editor: SparkEditor | null) => void;
   onSaveState: (state: SaveState) => void;
+  /** Fires with the document text on load and on every change. */
+  onText?: (text: string) => void;
 }
 
 /**
@@ -22,10 +23,33 @@ interface EditorProps {
  * debounced and also fires on blur and on page hide, so nothing is ever lost to
  * a closed tab — there is no save button because there shouldn't need to be one.
  */
-export function Editor({ page, autofocus, onEditor, onSaveState }: EditorProps) {
-  const { workspace, toast, openPage, pages } = useApp();
+export function Editor({ page, autofocus, onEditor, onSaveState, onText }: EditorProps) {
+  const { workspace, toast, openPage, pages, pendingLine, preferences } = useApp();
   const hostRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<SparkEditor | null>(null);
+
+  // Held in a ref so the mount effect, which runs once, always calls the
+  // current one. Passing them as dependencies would rebuild the editor and drop
+  // the cursor every time the parent re-rendered.
+  const onTextRef = useRef(onText);
+  onTextRef.current = onText;
+
+  // Read through a ref for the same reason: the save timer is armed from a
+  // callback that must not be rebuilt, and the delay should take effect from
+  // the next keystroke rather than on a remount.
+  const autosaveDelay = useRef(preferences.autosaveDelay);
+  autosaveDelay.current = preferences.autosaveDelay;
+
+  const behaviourRef = useRef({
+    continueLists: preferences.continueLists,
+    autoPairs: preferences.autoPairs,
+    spellcheck: preferences.spellcheck,
+  });
+  behaviourRef.current = {
+    continueLists: preferences.continueLists,
+    autoPairs: preferences.autoPairs,
+    spellcheck: preferences.spellcheck,
+  };
 
   // Kept in a ref so `[[` completion always sees the current page list without
   // rebuilding the editor (which would drop the cursor) on every list change.
@@ -41,12 +65,32 @@ export function Editor({ page, autofocus, onEditor, onSaveState }: EditorProps) 
   const currentPage = useRef(page);
   currentPage.current = page;
 
+  /**
+   * The in-flight load, and the in-flight save.
+   *
+   * Both exist to stop this editor writing against a revision it has already
+   * superseded, which is the one way a single tab manufactures a conflict with
+   * nobody but itself:
+   *
+   * - A save that starts while the previous one is still in the air would send
+   *   the revision from *before* that write, and the server would rightly
+   *   reject it. Autosave fires on a timer, so any save slower than the delay
+   *   used to do exactly this.
+   * - A save that starts before the first read has returned would send the
+   *   revision from the local cache, which is only a guess.
+   *
+   * Chaining them means the revision is always the one the last completed
+   * exchange produced.
+   */
+  const loading = useRef<Promise<unknown> | null>(null);
+  const saving = useRef<Promise<void> | null>(null);
+
   const [conflict, setConflict] = useState<{ theirs: string; mine: string } | null>(null);
 
   // -- saving ---------------------------------------------------------------
 
-  const flush = useCallback(
-    async (force = false) => {
+  const writeNow = useCallback(
+    async (force: boolean) => {
       const text = pendingText.current;
       const target = currentPage.current;
       if (text === null) return;
@@ -58,7 +102,8 @@ export function Editor({ page, autofocus, onEditor, onSaveState }: EditorProps) 
         // the user has explicitly resolved a conflict.
         const meta = await workspace.space.write(target, text, force ? null : loadedRev.current);
         loadedRev.current = meta.rev;
-        workspace.events.emit('page:save', { page: target, text });
+        writeCachedPage(target, text, meta.rev);
+        workspace.events.emit('page:save', { page: target, text, rev: meta.rev });
         onSaveState('saved');
       } catch (err) {
         if (err instanceof ConflictError) {
@@ -75,12 +120,38 @@ export function Editor({ page, autofocus, onEditor, onSaveState }: EditorProps) 
     [workspace, onSaveState, toast],
   );
 
+  /** Queues a write behind whatever read or write is already in the air. */
+  const flush = useCallback(
+    (force = false): Promise<void> => {
+      // Read before publishing this one. Waiting on `saving.current` from
+      // *inside* the chain would be waiting on the chain itself, because it is
+      // reassigned below before any of this body runs.
+      const previous = saving.current;
+
+      const queued = (async () => {
+        // A failed load or a failed earlier write must not wedge the queue —
+        // each save carries its own revision and its own error handling.
+        await Promise.resolve(loading.current).catch(() => {});
+        await Promise.resolve(previous).catch(() => {});
+        await writeNow(force);
+      })();
+
+      saving.current = queued;
+      void queued.finally(() => {
+        if (saving.current === queued) saving.current = null;
+      });
+      return queued;
+    },
+    [writeNow],
+  );
+
   const scheduleSave = useCallback(
     (text: string) => {
       pendingText.current = text;
+      onTextRef.current?.(text);
       onSaveState('dirty');
       if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
-      saveTimer.current = window.setTimeout(() => void flush(), AUTOSAVE_MS);
+      saveTimer.current = window.setTimeout(() => void flush(), autosaveDelay.current);
     },
     [flush, onSaveState],
   );
@@ -88,30 +159,78 @@ export function Editor({ page, autofocus, onEditor, onSaveState }: EditorProps) 
   // -- loading a page into the editor ---------------------------------------
 
   const loadPage = useCallback(
-    async (name: string, isCancelled: () => boolean) => {
-      let text = '';
-      let rev: string | null = null;
-      try {
-        const page = await workspace.space.read(name);
-        text = page.text;
-        rev = page.rev;
-      } catch {
-        // A page that doesn't exist yet is simply an empty one. An empty base
-        // revision says "create it"; writing to it creates the file, and
-        // navigating away without typing leaves no trace.
-        text = '';
-        rev = '';
-      }
-      if (isCancelled() || !editorRef.current) return;
+    (name: string, isCancelled: () => boolean): Promise<void> => {
+      /** Puts text on screen, jumps to any pending line, and tells the app. */
+      const show = (text: string, rev: string | null, settled: boolean) => {
+        const editor = editorRef.current;
+        if (!editor) return;
 
-      loadedRev.current = rev;
-      editorRef.current.setPage(name, text);
-      workspace.tasks.update(name, text);
+        // `null` means "not confirmed by the server yet". `flush` waits on the
+        // load before writing anything, so a cached revision is never the one a
+        // write is made against — it is only what is painted.
+        if (settled) loadedRev.current = rev;
+        editor.setPage(name, text);
+        onTextRef.current?.(text);
+
+        // Arriving from a task or a backlink means arriving at a *line*, not
+        // just a page. Consume the request so a later reload doesn't jump again.
+        const jump = pendingLine.current;
+        if (jump && jump.page === name) {
+          pendingLine.current = null;
+          editor.goToLine(jump.line);
+        }
+        workspace.tasks.update(name, text);
+        onSaveState('saved');
+        if (autofocus) editor.focus();
+      };
+
+      // What we already have, drawn straight away. A page you read a minute ago
+      // should not wait on a round trip to appear.
+      const cached = readCachedPage(name);
+      if (cached && !isCancelled()) show(cached.text, null, false);
+
+      const load = (async () => {
+        let text = '';
+        let rev = '';
+        try {
+          const page = await workspace.space.read(name);
+          text = page.text;
+          rev = page.rev;
+          writeCachedPage(name, page.text, page.rev);
+        } catch {
+          // A page that doesn't exist yet is simply an empty one. An empty base
+          // revision says "create it"; writing to it creates the file, and
+          // navigating away without typing leaves no trace.
+          forgetCachedPage(name);
+        }
+        if (isCancelled() || !editorRef.current) return;
+
+        // Anything typed against the cached text is the newer truth; leave it
+        // alone and let the ordinary conflict flow handle the disagreement.
+        if (pendingText.current !== null) {
+          loadedRev.current = rev;
+          return;
+        }
+
+        // Same text as the cache already showed: adopt the revision and leave
+        // the document — and the cursor sitting in it — completely alone.
+        if (cached && cached.text === text) {
+          loadedRev.current = rev;
+          return;
+        }
+
+        show(text, rev, true);
+      })();
+
+      loading.current = load;
+      void load.finally(() => {
+        if (loading.current === load) loading.current = null;
+      });
+
       workspace.events.emit('page:open', { page: name });
-      onSaveState('saved');
-      if (autofocus) editorRef.current.focus();
+      return load;
     },
-    [workspace, onSaveState, autofocus],
+    [workspace, onSaveState, autofocus, pendingLine],
   );
 
   // -- mount ----------------------------------------------------------------
@@ -148,6 +267,8 @@ export function Editor({ page, autofocus, onEditor, onSaveState }: EditorProps) 
           if (/^https?:\/\//i.test(url)) window.open(url, '_blank', 'noopener,noreferrer');
           else if (isValidPageName(url)) openPage(normalizePageName(url));
         },
+        // A tag is a link to its own virtual page.
+        onTag: (tag) => openPage(tagPageName(tag)),
 
         slashCommands: () => workspace.registry.slashCommands(),
         runSlash: (command) => {
@@ -156,11 +277,18 @@ export function Editor({ page, autofocus, onEditor, onSaveState }: EditorProps) 
         },
         decorators: () => workspace.registry.decorators(),
         pages: () => pageNamesRef.current,
+        behaviour: behaviourRef.current,
       });
 
       editorRef.current = editor;
       detach = workspace.editor.attach(editor);
-      onEditor(editor);
+      onEditor?.(editor);
+
+      // Dev-only handle for debugging and browser-driven tests. Stripped from
+      // production builds by the constant-folded `import.meta.env.DEV`.
+      if (import.meta.env.DEV) {
+        (window as unknown as { __spark?: unknown }).__spark = editor;
+      }
 
       // The page effect below may have already run and found no editor, so the
       // first load happens here.
@@ -172,11 +300,17 @@ export function Editor({ page, autofocus, onEditor, onSaveState }: EditorProps) 
       detach?.();
       editorRef.current?.destroy();
       editorRef.current = null;
-      onEditor(null);
+      onEditor?.(null);
     };
     // Built once and reused across pages — `setPage` swaps the document.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Typing behaviours are reconfigured in place rather than by rebuilding the
+  // editor, so changing one in Settings does not cost you the cursor.
+  useEffect(() => {
+    editorRef.current?.setBehaviour(behaviourRef.current);
+  }, [preferences.continueLists, preferences.autoPairs, preferences.spellcheck]);
 
   // -- page switching -------------------------------------------------------
 
@@ -210,14 +344,28 @@ export function Editor({ page, autofocus, onEditor, onSaveState }: EditorProps) 
    * write is left alone and the normal conflict flow handles it.
    */
   useEffect(() => {
-    const off = workspace.events.on('page:save', ({ page: saved, text }) => {
+    const off = workspace.events.on('page:save', ({ page: saved, text, rev }) => {
       if (saved !== currentPage.current) return;
       if (pendingText.current !== null) return;
       const editor = editorRef.current;
-      if (!editor || editor.text() === text) return;
+      if (!editor) return;
 
-      // Re-read rather than trusting the event's text alone: the revision has
-      // to come with it, or the next keystroke would write against a stale one.
+      // Matching text is *not* a reason to skip the revision. An editor showing
+      // the same characters as the write that just landed still holds the
+      // revision from before it, and the next keystroke would be rejected with
+      // a conflict it had no way to see coming — the one that turns up with a
+      // single tab open and nobody else editing anything.
+      if (rev) loadedRev.current = rev;
+      if (editor.text() === text) return;
+
+      if (rev !== undefined) {
+        editor.setPage(saved, text);
+        onSaveState('saved');
+        return;
+      }
+
+      // No revision on the event (an older plugin, say): re-read, because the
+      // text alone would leave this editor writing against a stale one.
       void workspace.space
         .read(saved)
         .then((page) => {
@@ -272,7 +420,17 @@ export function Editor({ page, autofocus, onEditor, onSaveState }: EditorProps) 
     if (!conflict) return;
     editorRef.current?.setText(conflict.theirs);
     setConflict(null);
-    void workspace.space.read(page).then(() => onSaveState('saved'));
+    // Re-read for the revision, not the text: adopting their version without
+    // adopting the revision that came with it leaves the very next keystroke
+    // conflicting all over again, against a fight the user just finished.
+    void workspace.space
+      .read(page)
+      .then((fresh) => {
+        loadedRev.current = fresh.rev;
+        writeCachedPage(page, fresh.text, fresh.rev);
+        onSaveState('saved');
+      })
+      .catch(() => onSaveState('error'));
   }, [conflict, page, workspace, onSaveState]);
 
   const keepBoth = useCallback(() => {
@@ -313,7 +471,16 @@ export function Editor({ page, autofocus, onEditor, onSaveState }: EditorProps) 
           </div>
         </div>
       )}
-      <div className="editor-host" ref={hostRef} />
+      <div
+        className="editor-host"
+        ref={hostRef}
+        // The bridge forwards `spark.editor` to the editor focused most
+        // recently. With two notes tiled side by side, that is the only thing
+        // that makes "Bold" act on the one you are typing in.
+        onFocusCapture={() => {
+          if (editorRef.current) workspace.editor.activate(editorRef.current);
+        }}
+      />
     </>
   );
 }

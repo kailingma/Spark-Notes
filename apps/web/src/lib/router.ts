@@ -9,15 +9,13 @@ import { encodePageName, normalizePageName } from '@spark/core';
  * bookmarked and linked to.
  */
 
-export type Route =
-  | { kind: 'page'; page: string }
-  | { kind: 'tasks' }
-  | { kind: 'home' };
-
-export const TASKS_ROUTE = '/tasks';
+export type Route = { kind: 'page'; page: string } | { kind: 'home' };
 
 export function parseRoute(pathname: string): Route {
-  if (pathname === TASKS_ROUTE) return { kind: 'tasks' };
+  // Tasks used to have a route of its own. It is a virtual *page* now, so the
+  // old URL redirects rather than breaking anyone's bookmark.
+  if (pathname === '/tasks') return { kind: 'page', page: 'Tasks' };
+
   if (pathname.startsWith('/p/')) {
     const page = decodePath(pathname.slice(3));
     return page ? { kind: 'page', page } : { kind: 'home' };
@@ -26,18 +24,26 @@ export function parseRoute(pathname: string): Route {
 }
 
 export function routeToPath(route: Route): string {
-  switch (route.kind) {
-    case 'tasks':
-      return TASKS_ROUTE;
-    case 'page':
-      return `/p/${encodePageName(route.page)}`;
-    default:
-      return '/';
-  }
+  return route.kind === 'page' ? `/p/${encodePageName(route.page)}` : '/';
 }
 
 export function useRoute(): [Route, (route: Route, replace?: boolean) => void] {
   const [route, setRoute] = useState<Route>(() => parseRoute(window.location.pathname));
+
+  // Normalise legacy or shorthand URLs to the canonical one, without adding a
+  // history entry — pressing Back should leave the app, not bounce.
+  //
+  // Read from `location` rather than from `route`, and re-derive the route from
+  // it. This effect runs once, and by the time it does the workbench has
+  // already pointed the URL at whatever it opened; comparing against the route
+  // captured on the first render would helpfully undo that.
+  useEffect(() => {
+    const current = window.location.pathname;
+    const canonical = routeToPath(parseRoute(current));
+    if (canonical !== current) {
+      window.history.replaceState(null, '', canonical);
+    }
+  }, []);
 
   useEffect(() => {
     const onPop = () => setRoute(parseRoute(window.location.pathname));

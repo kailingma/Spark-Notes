@@ -2,7 +2,8 @@ node_modules/
 dist/
 *.tsbuildinfo
 
-# Server-side state: GitHub token, sync bookkeeping. Never commit this.
+# Server-side state: GitHub token, AI provider key, sync bookkeeping.
+# Never commit this.
 .spark/
 
 # The default local space. Point SPARK_SPACE at your own notes directory,
@@ -15,3 +16,8 @@ apps/web/public/fonts/
 .DS_Store
 .env
 .env.local
+.env.bak
+
+# Agent working notes — local context, not part of the project.
+AGENTS.md
+CLAUDE.md

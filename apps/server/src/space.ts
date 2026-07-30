@@ -81,6 +81,44 @@ export class FileSpace {
     return pages.sort((a, b) => b.modified - a.modified);
   }
 
+  /**
+   * Every folder in the space, including empty ones.
+   *
+   * Folders are otherwise only implied by page names, which means a folder you
+   * just made and have not put anything in does not exist as far as the client
+   * is concerned. It exists on disk, so it should exist in the navigator.
+   */
+  async listFolders(): Promise<string[]> {
+    const folders: string[] = [];
+    await this.#walkFolders(this.root, folders);
+    return folders.sort();
+  }
+
+  /** Creates a folder, and any parent it needs. */
+  async createFolder(name: string): Promise<string> {
+    // `pathFor` appends `.md` to anything without a known extension, which is
+    // exactly wrong here — a folder is the path itself.
+    const clean = this.#folderPath(name);
+    await mkdir(clean.absolute, { recursive: true });
+    return clean.name;
+  }
+
+  #folderPath(name: string): { name: string; absolute: string } {
+    const clean = name.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    if (!clean) throw new InvalidPageName('folder name is empty');
+    if (/[\0<>:"|?*]/.test(clean)) throw new InvalidPageName('folder name has illegal characters');
+    if (clean.split('/').some((part) => part === '.' || part === '..' || part === '')) {
+      throw new InvalidPageName('folder name has an empty or relative segment');
+    }
+
+    const absolute = resolve(this.root, clean);
+    const rel = relative(this.root, absolute);
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
+      throw new InvalidPageName('folder name escapes the space');
+    }
+    return { name: rel.split(sep).join('/'), absolute };
+  }
+
   async read(name: string): Promise<PageContent> {
     const path = this.pathFor(name);
     let text: string;
@@ -221,6 +259,23 @@ export class FileSpace {
       } catch {
         // Vanished between readdir and stat — skip it.
       }
+    }
+  }
+
+  async #walkFolders(dir: string, out: string[]): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name.startsWith('.') || IGNORED_DIRS.has(entry.name)) continue;
+      const full = join(dir, entry.name);
+      out.push(relative(this.root, full).split(sep).join('/'));
+      await this.#walkFolders(full, out);
     }
   }
 

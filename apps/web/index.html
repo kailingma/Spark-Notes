@@ -14,11 +14,44 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <title>Spark</title>
     <script>
-      // Apply the saved theme before first paint so there is never a flash of
-      // the wrong background.
+      // Apply the saved appearance before first paint, so there is never a
+      // flash of the wrong background, the wrong face or the wrong size. This
+      // duplicates `applyAppearance` on purpose: the React bundle has not
+      // loaded yet, and the whole point is to run before it does.
       try {
-        var t = JSON.parse(localStorage.getItem('spark:app.theme') || '"system"');
-        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+        var root = document.documentElement;
+        var a = JSON.parse(localStorage.getItem('spark:app.appearance') || 'null') || {};
+        var t = a.theme || JSON.parse(localStorage.getItem('spark:app.theme') || '"system"');
+        if (t === 'light' || t === 'dark') root.dataset.theme = t;
+        var face = function (v) {
+          return v === 'serif' || v === 'mono' || v === 'sans' || v === 'curated';
+        };
+        if (face(a.font)) root.dataset.font = a.font;
+        // Before the interface had its own face it wore the reading one.
+        if (face(a.uiFont)) root.dataset.uiFont = a.uiFont;
+        else if (face(a.font)) root.dataset.uiFont = a.font;
+        if (typeof a.fontSize === 'number') root.style.setProperty('--editor-font-size', a.fontSize + 'px');
+        var ui = typeof a.uiFontSize === 'number' ? a.uiFontSize : typeof a.uiScale === 'number' ? a.uiScale * 16 : null;
+        if (ui !== null) root.style.setProperty('--ui-font-size', ui + 'px');
+        root.dataset.layout = a.layout === 'classic' ? 'classic' : 'workbench';
+        if (typeof a.themeId === 'string') root.dataset.themeId = a.themeId;
+
+        // The theme itself, from the last time it was resolved.
+        //
+        // A theme is contributed by a plugin, and plugins load after the server
+        // config, which is hundreds of milliseconds into the session — so
+        // without this every reload paints the default palette first and yours
+        // second. `applyTheme` rewrites both this element and the cache on every
+        // change, so what is replayed here is never stale by more than the
+        // moment before the app took over. It is inert if there is nothing
+        // cached, which is exactly the unthemed case.
+        var css = localStorage.getItem('spark:app.themeCss');
+        if (css) {
+          var style = document.createElement('style');
+          style.id = 'spark-theme';
+          style.textContent = css;
+          document.head.appendChild(style);
+        }
       } catch (e) {}
     </script>
   </head>
