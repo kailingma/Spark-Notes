@@ -51,6 +51,30 @@ export interface Preferences {
   sparkConfirmTools: boolean;
   /** How many past exchanges travel with a new message. */
   sparkHistoryDepth: number;
+
+  /**
+   * How much happens without being asked about.
+   *
+   * A different question from the permissions above, which is why it is a
+   * different field: those say what Spark may *ever* do, this says what it must
+   * check first. See the server's `spark-tools.ts`.
+   */
+  sparkPermissionMode: 'manual' | 'code' | 'edit' | 'auto';
+  /**
+   * The model preset in force, by id.
+   *
+   * Here rather than only on the server because it is a property of how *you*
+   * are working right now — one machine on the fast model while another drafts on
+   * the slow one is a reasonable thing to want, and it costs a request to change
+   * if it lives only in `.spark/spark.json`.
+   */
+  sparkModeId: string;
+  /** Show what the model reasoned, when the model reasons out loud. */
+  sparkShowThinking: boolean;
+  /** Show the trail of what Spark did while it was answering. */
+  sparkShowActions: boolean;
+  /** Send the note you are looking at, and any selection in it, with the message. */
+  sparkSendsCurrentFile: boolean;
   /**
    * Let Spark keep notes about you in `memory/` between conversations.
    *
@@ -67,6 +91,37 @@ export interface Preferences {
    * in its environment. This toggle is hidden when it does not.
    */
   sparkCanRun: boolean;
+  /**
+   * The conversation this device last had open, so leaving Spark and coming
+   * back — closing the panel, closing the tab, reloading — resumes it instead
+   * of starting blank. Empty string means "nothing to resume", not `null`:
+   * `loadPreferences` drops a stored value whose type doesn't match the
+   * default, and `typeof null` would make every stored id vanish.
+   */
+  sparkLastChatId: string;
+  /**
+   * Width of the docked conversation overlay, in px — the number the drag
+   * handle on its right edge produces. A width you dragged is a width you
+   * mean, and it survives a reload the way the rails' sizes do.
+   */
+  sparkOverlayWidth: number;
+  /**
+   * Keep the conversation list (and its projects) open after opening a chat.
+   * Unpinned, choosing a chat closes the overlay so the conversation is what
+   * you look at; pinned, the list stays up so a browsing session can move
+   * from chat to chat without reopening it. Only meaningful when the overlay
+   * docks beside the conversation — when the panel is too narrow for that,
+   * the list covers everything and choosing a chat always closes it.
+   */
+  sparkOverlayPinned: boolean;
+  /**
+   * How the conversation list is ordered: `recent` (the server's natural
+   * order), `alpha` (by title), `project` (grouped under their project, with
+   * ungrouped chats last), or `date` (grouped Today/Yesterday/This week/
+   * Older). A sort somebody picked is a sort they mean, so it persists like
+   * the overlay's width does.
+   */
+  sparkChatSort: 'recent' | 'alpha' | 'project' | 'date';
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -91,6 +146,16 @@ export const DEFAULT_PREFERENCES: Preferences = {
   sparkSeesContext: true,
   sparkConfirmTools: false,
   sparkHistoryDepth: 12,
+  // Not `auto`: a default that skips every question is not a default anybody
+  // chose. `edit` lets the ordinary work happen and still stops at the edits you
+  // cannot check by reading the result.
+  sparkPermissionMode: 'edit',
+  sparkModeId: 'balanced',
+  // On, because thinking that arrives is thinking you paid for, and the first
+  // time it is useful is the time you did not know to switch it on.
+  sparkShowThinking: true,
+  sparkShowActions: true,
+  sparkSendsCurrentFile: true,
   // On, because an assistant that cannot learn your conventions asks you the
   // same question every week, and everything it writes is a markdown file in
   // your own space that you can read, edit or delete.
@@ -98,6 +163,39 @@ export const DEFAULT_PREFERENCES: Preferences = {
   // Off. Running generated code is not something to arrive switched on, even
   // when the server has somewhere safe to run it.
   sparkCanRun: false,
+  sparkLastChatId: '',
+  // 420px is the narrowest dock that still holds a project's main column and
+  // its drawer side by side; it clamps to leave the conversation visible when
+  // the panel is tighter than that.
+  sparkOverlayWidth: 420,
+  // Off. Choosing a chat should be followed by the chat; pinning is something
+  // somebody asks for, not the default state of the panel.
+  sparkOverlayPinned: false,
+  // Recency is what a conversation list is for: the thing you were just doing
+  // is at the top. The other two are searches for something, not the default
+  // way to read the list.
+  sparkChatSort: 'recent',
+};
+
+/**
+ * The four modes, in the order they appear in the switcher: least to most
+ * autonomous, so the row itself says which way is which.
+ */
+export const PERMISSION_MODES: Array<Preferences['sparkPermissionMode']> = [
+  'manual',
+  'code',
+  'edit',
+  'auto',
+];
+
+export const PERMISSION_MODE_LABELS: Record<
+  Preferences['sparkPermissionMode'],
+  { label: string; hint: string }
+> = {
+  manual: { label: 'Manual', hint: 'Every tool call waits for you.' },
+  code: { label: 'Code', hint: 'Running code goes ahead; everything else asks.' },
+  edit: { label: 'Edit', hint: 'Reads, writes and runs go ahead; deletes still ask.' },
+  auto: { label: 'Auto', hint: 'Nothing asks. Spark works to the end of the job.' },
 };
 
 export const AUTOSAVE_RANGE = { min: 200, max: 3000, step: 100 } as const;
@@ -124,6 +222,12 @@ export function loadPreferences(settings: SettingsApi): Preferences {
   preferences.autosaveDelay = clamp(preferences.autosaveDelay, AUTOSAVE_RANGE);
   preferences.measure = clamp(preferences.measure, MEASURE_RANGE);
   preferences.sparkHistoryDepth = clamp(preferences.sparkHistoryDepth, HISTORY_RANGE);
+  // The type check above only proves it is a string. A stored value from a
+  // future version, or a hand-edited one, must not be sent to the server as a
+  // permission mode it does not know.
+  if (!PERMISSION_MODES.includes(preferences.sparkPermissionMode)) {
+    preferences.sparkPermissionMode = DEFAULT_PREFERENCES.sparkPermissionMode;
+  }
   return preferences;
 }
 

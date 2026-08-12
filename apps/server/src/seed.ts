@@ -13,6 +13,14 @@ export async function seedSpace(space: FileSpace): Promise<boolean> {
 
   await space.write('Welcome', WELCOME, null);
   await space.write('_plugins/word-count.js', EXAMPLE_PLUGIN, null);
+  // A skill, for the same reason there is an example plugin: `_skills/` is a
+  // folder nobody will guess at, and one real file in it is worth a paragraph of
+  // documentation about it.
+  //
+  // No `.md` on the name. `pathFor` adds the extension to anything that is not
+  // one of the verbatim types, so `SKILL.md` here would land on disk as
+  // `SKILL.md.md` — which the skill loader then does not find, silently.
+  await space.write('_skills/weekly-review/SKILL', EXAMPLE_SKILL, null);
   return true;
 }
 
@@ -51,6 +59,18 @@ transcribes as you go.
 \`_plugins/word-count.js\` in this space is a working plugin. Edit it, reload, and
 it changes. Plugins live in your notes folder, so they sync with everything else.
 
+## Spark learns as you go
+
+Ask Spark something in the right-hand panel. Correct it once — "meeting notes go
+in \`meetings/\`" — and it writes that down in \`memory/conventions\`, which is a
+markdown file you can read, edit or delete like any other. [[Memory]] shows
+everything it thinks it knows.
+
+\`_skills/weekly-review/SKILL.md\` is a **skill**: a job you want done a particular
+way, written once. Spark is told what each skill is for and reads the
+instructions when the job comes up. Write your own by copying that folder, or
+just tell Spark how you want something done and ask it to remember.
+
 ## Sync
 
 You're in **online mode**: every keystroke saves to the server, and what's on
@@ -61,6 +81,47 @@ line, so two people writing in different paragraphs never conflict.
 ---
 
 Delete this page whenever you like. Nothing depends on it.
+`;
+
+/**
+ * An example skill.
+ *
+ * Written as instructions addressed to Spark, not as documentation about Spark,
+ * because that is the thing a skill *is* — and a person opening this file to copy
+ * it should see the register they are meant to write in.
+ */
+const EXAMPLE_SKILL = `---
+name: weekly-review
+description: Gathers the week into one page — what got done, what slipped, what is next.
+when: they ask for a weekly review, or say it is time to look back at the week
+---
+
+# Weekly review
+
+## Gather first, write second
+
+1. Read the journal pages for the last seven days.
+2. List every task closed in that window, and every one still open.
+3. Only then start writing. A review assembled while you are still reading it
+   turns into a list of everything you found.
+
+## The page
+
+Create \\\`reviews/YYYY-MM-DD\\\` for the Sunday that ends the week, with:
+
+- **What happened** — two or three sentences of prose, in their voice. Not a
+  bulleted digest of the journal; they already have the journal.
+- **Closed** — the tasks finished, as plain lines.
+- **Still open** — the tasks that did not move, with the page each lives on.
+- **Next week** — only what the notes actually support. Do not invent goals.
+
+## Rules
+
+Never edit the journal pages you read. A review is a new page that points at
+them, so re-running it is always safe.
+
+If a week is nearly empty, say so in one line and stop. A thin week padded into a
+full page is worse than an honest short one.
 `;
 
 const EXAMPLE_PLUGIN = `import { definePlugin } from '@spark/plugin-sdk';

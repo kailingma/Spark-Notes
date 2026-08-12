@@ -118,6 +118,14 @@ export class EditorBridge implements EditorApi {
     this.#delegate?.toggleWrap(before, after);
   }
 
+  moveItem(dir: -1 | 1): boolean {
+    return this.#delegate?.moveItem(dir) ?? false;
+  }
+
+  indentItem(outdent: boolean): boolean {
+    return this.#delegate?.indentItem(outdent) ?? false;
+  }
+
   onChange(fn: (text: string) => void): Unsubscribe {
     this.#listeners.add(fn);
     return () => this.#listeners.delete(fn);

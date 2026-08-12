@@ -6,8 +6,26 @@ import { ChevronIcon, FolderIcon, PageIcon, PlusIcon } from '../components/Icons
  *
  * Sharing them is what keeps tree, list and columns feeling like one thing:
  * the same target size, the same hover, the same way the current page is
- * marked, whichever shape you happen to be looking at the space in.
+ * marked, the same drag and the same menu, whichever shape you happen to be
+ * looking at the space in.
  */
+
+/** What a row needs to be draggable and right-clickable, threaded from the top. */
+export interface RowActions {
+  /** Begins a workbench drag of this row's page. */
+  onDragStart?: (event: React.PointerEvent) => void;
+  /** Opens the actions menu at a point. Bound to right-click and to long-press. */
+  onMenu?: (event: React.MouseEvent | React.PointerEvent) => void;
+  /** True while this row is the cut/copy source, or a live drop target. */
+  cut?: boolean;
+  dropping?: boolean;
+  /**
+   * The folder a drop on this row lands in — itself for a folder, its parent
+   * for a page. The drag hit test walks up with `closest`, so a row without one
+   * falls through to the panel, which is the root of the space.
+   */
+  dropPath?: string;
+}
 
 export function PageRow({
   label,
@@ -17,6 +35,7 @@ export function PageRow({
   icon,
   onOpen,
   title,
+  actions,
 }: {
   label: string;
   detail?: string;
@@ -25,15 +44,22 @@ export function PageRow({
   icon?: ReactNode;
   onOpen: (event: React.MouseEvent) => void;
   title?: string;
+  actions?: RowActions;
 }) {
   return (
     <button
       className="nav-row"
       data-kind="page"
       data-depth={depth}
+      data-cut={actions?.cut || undefined}
       aria-current={current ? 'page' : undefined}
       title={title ?? label}
       onClick={onOpen}
+      // The press that opens a page is also the press that drags it, which is
+      // why the drag has a movement threshold — see `startPointerDrag`.
+      onPointerDown={actions?.onDragStart}
+      onContextMenu={actions?.onMenu}
+      data-nav-folder={actions?.dropPath}
     >
       <span className="nav-row-icon">{icon ?? <PageIcon />}</span>
       <span className="nav-row-label">{label}</span>
@@ -61,6 +87,7 @@ export function FolderRow({
   onOpenPage,
   hasPage,
   onAddPage,
+  actions,
 }: {
   label: string;
   count: number;
@@ -72,17 +99,25 @@ export function FolderRow({
   onOpenPage?: (event: React.MouseEvent) => void;
   hasPage?: boolean;
   onAddPage?: () => void;
+  actions?: RowActions;
 }) {
   return (
-    <div className="nav-row-group">
+    <div
+      className="nav-row-group"
+      data-dropping={actions?.dropping || undefined}
+      data-nav-folder={actions?.dropPath}
+    >
       <button
         className="nav-row"
         data-kind="folder"
         data-depth={depth}
         data-expanded={expanded || undefined}
         data-selected={selected || undefined}
+        data-cut={actions?.cut || undefined}
         aria-expanded={expanded}
         onClick={onToggle}
+        onPointerDown={actions?.onDragStart}
+        onContextMenu={actions?.onMenu}
         title={label}
       >
         {expanded === undefined ? (

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { aiSettings, describeFailure } from './ai.js';
 import { embeddingEndpointOf, type AiSettings } from './ai-settings.js';
 import { config } from './config.js';
+import { fetchWithRetry } from './retry.js';
 import type { FileSpace } from './space.js';
 
 /**
@@ -291,7 +292,7 @@ async function embed(texts: string[], settings: AiSettings, signal?: AbortSignal
 
   const out: number[][] = [];
   for (let i = 0; i < texts.length; i += BATCH) {
-    const res = await fetch(url, {
+    const res = await fetchWithRetry(url, {
       method: 'POST',
       headers,
       body: JSON.stringify({ model: settings.embedModel.trim(), input: texts.slice(i, i + BATCH) }),
@@ -339,9 +340,24 @@ export async function find(
   query: string,
   options: { limit?: number; signal?: AbortSignal } = {},
 ): Promise<FindResult> {
-  const limit = Math.min(Math.max(options.limit ?? 8, 1), 30);
   const chunks = await chunkSpace(space);
-  if (chunks.length === 0) return { hits: [], semantic: false, note: 'the space is empty' };
+  return findInChunks(chunks, query, { ...options, emptyNote: 'the space is empty' });
+}
+
+/**
+ * The ranking core of `find()`, pulled out so a caller with a different
+ * source of chunks — `chat-retrieval.ts`'s past-conversation search is the
+ * one that exists today — gets the same BM25+embeddings fusion rather than
+ * a second, drifting implementation of it. `find()` itself is now the thin
+ * "chunk the space, then this" wrapper.
+ */
+export async function findInChunks(
+  chunks: Chunk[],
+  query: string,
+  options: { limit?: number; signal?: AbortSignal; emptyNote?: string } = {},
+): Promise<FindResult> {
+  const limit = Math.min(Math.max(options.limit ?? 8, 1), 30);
+  if (chunks.length === 0) return { hits: [], semantic: false, note: options.emptyNote ?? 'nothing to search' };
 
   // Deeper than `limit` on purpose: fusion is only interesting if each list has
   // candidates the other missed.
@@ -354,8 +370,12 @@ export async function find(
   const settings = aiSettings.get();
   if (embeddingsEnabled(settings)) {
     try {
-      dense = await denseRank(chunks, query, settings, limit * 4, options.signal);
+      const ranked = await denseRank(chunks, query, settings, limit * 4, options.signal);
+      dense = ranked.indices;
       semantic = true;
+      if (ranked.truncated) {
+        note = `The space has more than ${MAX_DENSE_CHUNKS} passages, so semantic search only considered the ${MAX_DENSE_CHUNKS} most textually relevant to this query — a passage that shares none of the query's words could still be missed.`;
+      }
     } catch (err) {
       // A failed embedding call must not fail the search: BM25 already has an
       // answer, and "no results" would be a worse lie than "fewer results".
@@ -386,15 +406,32 @@ export async function find(
   return { hits, semantic, note };
 }
 
+/**
+ * The candidates dense re-ranking will actually embed and compare. Bounded
+ * to `MAX_DENSE_CHUNKS` to cap cost, but *which* chunks fill that bound
+ * matters: on a space bigger than the bound, cutting by file-enumeration
+ * order could drop a whole topic that happens to sit past it, silently,
+ * every time. Picking by BM25 relevance instead means the chunks dropped
+ * are the ones that share the fewest of the query's own words with it —
+ * a much smaller loss, and `findInChunks` tells the caller it happened.
+ */
+function candidatesFor(chunks: Chunk[], query: string): { considered: Chunk[]; indexMap: number[]; truncated: boolean } {
+  if (chunks.length <= MAX_DENSE_CHUNKS) {
+    return { considered: chunks, indexMap: chunks.map((_, i) => i), truncated: false };
+  }
+  const indexMap = bm25(chunks, query, MAX_DENSE_CHUNKS);
+  return { considered: indexMap.map((i) => chunks[i]), indexMap, truncated: true };
+}
+
 async function denseRank(
   chunks: Chunk[],
   query: string,
   settings: AiSettings,
   limit: number,
   signal?: AbortSignal,
-): Promise<number[]> {
+): Promise<{ indices: number[]; truncated: boolean }> {
   const model = settings.embedModel.trim();
-  const considered = chunks.slice(0, MAX_DENSE_CHUNKS);
+  const { considered, indexMap, truncated } = candidatesFor(chunks, query);
   const keys = considered.map((chunk) => keyOf(embedText(chunk), model));
 
   const known = await cache.get(keys);
@@ -418,7 +455,7 @@ async function denseRank(
   // searching, which is not something this app should keep.
   const [queryVector] = await embed([query], settings, signal);
 
-  return considered
+  const indices = considered
     .map((_, index) => {
       const vector = known.get(keys[index]);
       return { index, score: vector ? cosine(queryVector, vector) : -1 };
@@ -426,7 +463,11 @@ async function denseRank(
     .filter((entry) => entry.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
-    .map((entry) => entry.index);
+    // Back to the original `chunks` indices — `considered` may be a
+    // relevance-picked subset, not a prefix of `chunks`.
+    .map((entry) => indexMap[entry.index]);
+
+  return { indices, truncated };
 }
 
 /** The heading travels with the chunk: it is often the only topical word in it. */

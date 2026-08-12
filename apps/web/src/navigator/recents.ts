@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useApp } from '../app-context';
+import { isVirtualPage } from '../virtual';
 
 /**
  * The pages you were last in.
@@ -7,6 +8,12 @@ import { useApp } from '../app-context';
  * Fed by `page:open` rather than by the navigation call, so it records what you
  * actually landed on — including arrivals through a `[[link]]`, a backlink, a
  * task, or a plugin — instead of only the ones that went through one function.
+ *
+ * Virtual pages (Tasks, Tags, Spark, Memory, Settings) are never recorded.
+ * They already have their own permanent row in "Views" — the whole reason
+ * Recent exists is to surface the *notes* you were just reading, and a list
+ * that fills up with the same handful of app screens crowds out the thing it
+ * is for.
  */
 
 const KEY = 'app.recent';
@@ -22,7 +29,7 @@ export function useRecentPages(limit = 5): string[] {
   // was listening — the navigator is usually opened after the first page loads,
   // and a Recent list that omits the note in front of you looks broken.
   useEffect(() => {
-    if (route.kind !== 'page') return;
+    if (route.kind !== 'page' || isVirtualPage(route.page)) return;
     setRecent((current) =>
       current[0] === route.page ? current : record(workspace, route.page),
     );
@@ -30,6 +37,7 @@ export function useRecentPages(limit = 5): string[] {
 
   useEffect(() => {
     return workspace.events.on('page:open', ({ page }) => {
+      if (isVirtualPage(page)) return;
       if (workspace.settings.get<string[]>(KEY, [])[0] === page) return;
       setRecent(record(workspace, page));
     });

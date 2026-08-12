@@ -34,12 +34,9 @@ import type { Appearance } from './appearance';
  *   the cache every reload flashes the default palette on the way to yours.
  */
 
-/** The id of the app's own theme, registered by the built-in themes plugin. */
-export const DEFAULT_THEME_ID = 'spark';
-
-/** Where the cached stylesheet lives, and the element the two writers share. */
+/** Where the cached stylesheet lives, and the element that carries it. */
 const CACHE_KEY = 'spark:app.themeCss';
-export const STYLE_ELEMENT_ID = 'spark-theme';
+const STYLE_ELEMENT_ID = 'spark-theme';
 
 /** Beyond this a cached stylesheet is not worth a synchronous read at boot. */
 const CACHE_LIMIT = 256 * 1024;
@@ -114,7 +111,6 @@ const THEME_TOKENS: ReadonlySet<ThemeToken> = new Set<ThemeToken>([
   'radius-lg',
   'gutter',
   'editor-line-height',
-  'editor-measure',
   'font-sans',
   'font-serif',
   'font-mono',
@@ -157,6 +153,9 @@ const PREVIEW_TOKENS: readonly ThemeToken[] = [
   'tag-soft',
   'code-bg',
   'code-inline-bg',
+  'radius-sm',
+  'radius',
+  'radius-lg',
 ];
 
 // ---------------------------------------------------------------------------
@@ -177,7 +176,7 @@ export interface ResolvedFonts extends FontRoles {
  * nor the reader asked for. A single-scheme theme ignoring the light/dark
  * toggle is at least a thing you can see and understand.
  */
-export function schemeTokens(theme: ThemeDefinition, scheme: ThemeScheme): ThemeTokens {
+function schemeTokens(theme: ThemeDefinition, scheme: ThemeScheme): ThemeTokens {
   const own = scheme === 'dark' ? theme.dark : theme.light;
   const other = scheme === 'dark' ? theme.light : theme.dark;
   return { ...theme.tokens, ...(own ?? other ?? {}) };
@@ -237,7 +236,7 @@ export interface ThemeInput {
  * Pure, and exported separately from `applyTheme` so it can be reasoned about
  * (and diffed) without a document.
  */
-export function buildThemeCss({ themes, packs, appearance }: ThemeInput): string {
+function buildThemeCss({ themes, packs, appearance }: ThemeInput): string {
   const theme = themes.find((entry) => entry.id === appearance.themeId);
   const blocks: string[] = [];
 
@@ -260,10 +259,13 @@ export function buildThemeCss({ themes, packs, appearance }: ThemeInput): string
   // The cards follow the scheme as well, in the same four blocks and for the
   // same reason: a gallery showing every theme's light palette in the dark is
   // showing you something you cannot choose.
+  const previewDark = previewCss(themes, 'dark', ':root');
   blocks.push(previewCss(themes, 'light', ':root'));
-  blocks.push(`@media (prefers-color-scheme: dark) {\n${indent(previewCss(themes, 'dark', ':root'))}}`);
-  blocks.push(previewCss(themes, 'light', `:root[data-theme='light']`));
-  blocks.push(previewCss(themes, 'dark', `:root[data-theme='dark']`));
+  if (previewDark) {
+    blocks.push(`@media (prefers-color-scheme: dark) {\n${indent(previewDark)}}`);
+    blocks.push(previewCss(themes, 'light', `:root[data-theme='light']`));
+    blocks.push(previewCss(themes, 'dark', `:root[data-theme='dark']`));
+  }
 
   return blocks.filter((block) => block.trim() !== '').join('\n\n');
 }
@@ -418,7 +420,7 @@ function fontCss(
   // the theme. Code, tables and frontmatter are monospaced on both sides of the
   // app, so two answers here would only ever be a disagreement.
   const mono = document?.mono ?? ui?.mono;
-  if (mono) set('--font-mono', stack(mono));
+  if (mono) set('--font-mono', stack(mono, MONO_FALLBACK));
 
   return out;
 }
@@ -453,7 +455,7 @@ function sampleCss(themes: ThemeDefinition[], packs: FontPackDefinition[]): stri
     set('--sample-heading-transform', roles.headingTransform, 20);
     set('--sample-heading-variation', roles.headingVariation, 200);
     set('--sample-ui', stack(roles.ui ?? roles.editor));
-    set('--sample-mono', stack(roles.mono));
+    set('--sample-mono', stack(roles.mono, MONO_FALLBACK));
     if (lines.length > 0) out.push(`[data-font-sample='${key}'] {\n${lines.join('\n')}\n}`);
   };
 
@@ -509,18 +511,29 @@ export function applyTheme(input: ThemeInput): void {
     style.id = STYLE_ELEMENT_ID;
     document.head.appendChild(style);
   }
-  // Set unconditionally-but-not-needlessly: replacing identical text would
-  // still make the browser re-resolve every rule in the sheet.
-  if (style.textContent !== css) style.textContent = css;
-
-  try {
-    if (css.length <= CACHE_LIMIT) globalThis.localStorage?.setItem(CACHE_KEY, css);
-    else globalThis.localStorage?.removeItem(CACHE_KEY);
-  } catch {
-    // Private browsing or a full quota. The cost is a flash of the default
-    // palette on the next reload, which is not worth failing a theme change for.
+  /*
+   * Both writes are gated on the text having actually changed, and that matters
+   * more than it looks. This runs on *every* appearance change, including each
+   * frame of a drag on the text-size slider — and neither size is part of this
+   * stylesheet. Ungated, that is a fifty-kilobyte string re-parsed and written
+   * synchronously to local storage sixty times a second.
+   */
+  if (style.textContent !== css) {
+    style.textContent = css;
+    try {
+      if (css.length <= CACHE_LIMIT) globalThis.localStorage?.setItem(CACHE_KEY, css);
+      else globalThis.localStorage?.removeItem(CACHE_KEY);
+    } catch {
+      // Private browsing or a full quota. The cost is a flash of the default
+      // palette on the next reload, which is not worth failing a theme change
+      // for.
+    }
   }
 
+  // Announced even when the stylesheet did not change, because the *mode* may
+  // have: Sans to Serif is a `data-font` swap that this file has no part in, and
+  // the editor still has to remeasure. Cheap either way — the measurement
+  // itself is skipped when the font state turns out to be identical.
   notifyTypographyChanged();
 }
 
@@ -534,7 +547,7 @@ export function applyTheme(input: ThemeInput): void {
  * `loadingdone` is: it is a fact about the page, and every editor alive needs to
  * hear it, not just the focused one.
  */
-export function notifyTypographyChanged(): void {
+function notifyTypographyChanged(): void {
   globalThis.dispatchEvent?.(new Event('spark:typography'));
 }
 
@@ -580,11 +593,36 @@ function quoteFamily(family: string): string {
  * Fonts are fetched rather than committed (`npm run fonts`), so a face may
  * simply not be there — and a stack ending in a generic keeps a missing file
  * looking like a different typeface instead of like a broken app.
+ *
+ * A pack that already wrote a stack of its own is left alone: the comma is the
+ * signal, and second-guessing an author who listed their own fallbacks would
+ * append ours after the generic, where nothing can ever reach it.
  */
-function stack(family: string | undefined): string | undefined {
+function stack(family: string | undefined, fallback = SANS_FALLBACK): string | undefined {
   if (family === undefined) return undefined;
-  return family.includes(',') ? family : `${quoteFamily(family.trim())}, var(--font-sans)`;
+  return family.includes(',') ? family : `${quoteFamily(family.trim())}, ${fallback}`;
 }
+
+/**
+ * The fallbacks, spelled out rather than borrowed from `var(--font-sans)`.
+ *
+ * Two reasons, and the second one is the load-bearing one:
+ *
+ * - A monospace cannot fall back to `var(--font-mono)` at all — that is the
+ *   property being defined, and a self-referential custom property is cyclic,
+ *   which CSS resolves by throwing the declaration away. It must not fall back
+ *   to a sans either: code that quietly stops being monospaced loses the column
+ *   alignment that is half of what a code block means.
+ * - **A `var()` in the fallback makes the whole declaration conditional on that
+ *   variable existing.** An unresolvable `var()` is invalid at computed-value
+ *   time, and the property does not degrade — it becomes *empty*. The generated
+ *   stylesheet is replayed from cache by the inline script in `index.html`,
+ *   which runs before the bundle's own CSS exists, so a stack written as
+ *   `'Bodoni Moda', var(--font-sans)` is empty for exactly as long as it takes
+ *   `tokens.css` to arrive. Spelled out, it is correct from the first byte.
+ */
+const SANS_FALLBACK = "ui-sans-serif, -apple-system, 'Segoe UI', sans-serif";
+const MONO_FALLBACK = "ui-monospace, 'SF Mono', Menlo, monospace";
 
 /** An id inside an attribute selector, restricted to what needs no escaping. */
 function escapeId(id: string): string {
@@ -595,6 +633,18 @@ function indent(block: string): string {
   return block.replace(/^(?=.)/gm, '  ');
 }
 
+/**
+ * Once per message, per session.
+ *
+ * The stylesheet is rebuilt on every appearance change, so a theme with one bad
+ * token would otherwise print the same warning every time somebody moved a
+ * slider — which buries the other things in the console under a defect that has
+ * already been reported.
+ */
+const warned = new Set<string>();
+
 function warn(message: string): void {
+  if (warned.has(message)) return;
+  warned.add(message);
   console.warn(`[spark] ${message}`);
 }

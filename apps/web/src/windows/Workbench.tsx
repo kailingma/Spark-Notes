@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { ViewDefinition } from '@spark/plugin-sdk';
 import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
   CloseIcon,
   FloatIcon,
   GripIcon,
@@ -9,7 +11,10 @@ import {
   RestoreIcon,
   SplitIcon,
 } from '../components/Icons';
-import { collectZones, resolveDrop, rectOf, startPointerDrag } from './drag';
+import { SparkWatermark } from '../components/SparkLogo';
+import { usePersisted } from '../navigator/section';
+import { SPARK_PAGE } from '../virtual';
+import { DRAG_THRESHOLD, rectOf, startPointerDrag } from './drag';
 import { useWindows } from './manager';
 import {
   activeViewOf,
@@ -21,7 +26,12 @@ import {
   type SplitNode,
   type ViewRef,
 } from './model';
-import { NAVIGATOR_VIEW } from './views';
+import { NAVIGATOR_VIEW, PAGE_VIEW, PLACES_VIEW } from './views';
+
+/** True for the one view whose own header already carries a grip and a close — see `SparkView`'s `beginHeaderDrag`. */
+function isSparkView(view: ViewRef): boolean {
+  return view.type === PAGE_VIEW && view.params.page === SPARK_PAGE;
+}
 
 /**
  * The workbench: sidebars around the outside, the tile tree in the middle, and the
@@ -33,8 +43,7 @@ import { NAVIGATOR_VIEW } from './views';
  * DOM mid-drag fights the drag.
  */
 export function Workbench() {
-  const { layout, narrow, classic, drag, setDrag, commitDrag, setWindowRect, modalOpen } =
-    useWindows();
+  const { layout, narrow, drag, startDrag, setWindowRect, modalOpen } = useWindows();
   const tilesRef = useRef<HTMLDivElement>(null);
 
   // Shrinking the browser must not strand a window off the bottom or the right.
@@ -60,55 +69,31 @@ export function Workbench() {
   }, [layout.windows, setWindowRect]);
 
   /**
-   * One pointer gesture, one drag session.
+   * Dragging a view is the shared gesture with a view-shaped payload.
    *
-   * A floating window's title bar both moves the window and hunts for a snap
-   * target, and those have to be the same session: two overlapping ones would
-   * each add their own listeners, each clear the drag state on release, and
-   * race over which of them got to commit.
+   * The session itself lives in the manager, because the navigator drags pages
+   * in from outside this component's tree — see `startDrag` there.
+   *
+   * Every handle this reaches — a tab, a rail tab, a tile grip, a title bar —
+   * is also something you click, so they all take the movement threshold. It is
+   * applied here rather than at each call site because the failure it prevents
+   * is silent: without it a click that wobbles a pixel commits a drop on
+   * release, and the rail tabs re-order themselves under your finger.
    */
   const beginDrag = useCallback<DragStarter>(
     (event, instanceId, options = {}) => {
-      // Nothing to drag onto: classic mode has one tile, no tab strip, and no
-      // windows, so every drop target a drag could find is unreachable anyway.
-      if (narrow || classic) return;
-      const root = tilesRef.current;
-      if (!root) return;
-
-      const zones = collectZones(root);
-      const offset = options.offset ?? { x: 0, y: 0 };
-      const fromWindow = options.windowId !== undefined;
-
-      startPointerDrag(event, {
-        onMove: (native, delta) => {
-          options.onMove?.(delta);
-          const point = { x: native.clientX, y: native.clientY };
-          const resolution = resolveDrop(point, zones, {
-            // A window that lands nowhere stays floating exactly where the
-            // pointer left it, so it needs no float target of its own — and it
-            // must not be swallowed by every tile it passes over on the way.
-            allowFloat: !fromWindow,
-            edgesOnly: fromWindow,
-          });
-          setDrag({
-            instanceId,
-            windowId: options.windowId,
-            pointer: { x: point.x - offset.x, y: point.y - offset.y },
-            preview: resolution?.preview ?? null,
-            target: resolution?.target ?? null,
-          });
+      startDrag(
+        event,
+        { kind: 'view', instanceId, windowId: options.windowId },
+        {
+          threshold: DRAG_THRESHOLD,
+          offset: options.offset,
+          onMove: options.onMove,
+          onCancel: options.onCancel,
         },
-        onEnd: (_native, _delta, cancelled) => {
-          if (cancelled) {
-            options.onCancel?.();
-            setDrag(null);
-          } else {
-            commitDrag();
-          }
-        },
-      });
+      );
     },
-    [narrow, classic, setDrag, commitDrag],
+    [startDrag],
   );
 
   const windows = layout.windows.filter((entry) => entry.surface === 'window');
@@ -124,16 +109,16 @@ export function Workbench() {
        * no tab stops, and it is removed the moment the modal closes.
        */}
       <div className="workbench-layer" inert={modalOpen || undefined}>
-        {!narrow && <SidebarRail side="left" />}
+        {!narrow && <SidebarRail side="left" onDragTab={beginDrag} />}
 
         <div className="workbench-centre">
           <div className="workbench-tiles" ref={tilesRef}>
             <NodeView node={layout.root} onDragTab={beginDrag} />
           </div>
-          {!narrow && <SidebarRail side="bottom" />}
+          {!narrow && <SidebarRail side="bottom" onDragTab={beginDrag} />}
         </div>
 
-        {!narrow && <SidebarRail side="right" />}
+        {!narrow && <SidebarRail side="right" onDragTab={beginDrag} />}
 
         {narrow && <MobileDrawer />}
 
@@ -142,6 +127,19 @@ export function Workbench() {
         ))}
 
         {drag?.preview && <div className="drop-preview" style={rectStyle(drag.preview)} />}
+
+        {/* What is in the air. A tab drags its own strip along visually, but a
+            page dragged out of the navigator has nothing to show for itself,
+            and a drop preview with no cursor label leaves you guessing what you
+            are about to drop. */}
+        {drag?.label && (
+          <div
+            className="drag-ghost"
+            style={{ left: `${drag.pointer.x}px`, top: `${drag.pointer.y}px` }}
+          >
+            {drag.label}
+          </div>
+        )}
       </div>
 
       {modals.map((window) => (
@@ -230,10 +228,32 @@ function SplitView({ split, onDragTab }: { split: SplitNode; onDragTab: DragStar
   );
 }
 
+/** A preview tab left unread and untouched this long becomes an ordinary one. */
+const PREVIEW_LINGER_MS = 5000;
+
 function GroupView({ group, onDragTab }: { group: GroupNode; onDragTab: DragStarter }) {
-  const { layout, focusGroup, narrow, classic } = useWindows();
+  const { layout, focusGroup, promoteView, narrow, classic } = useWindows();
   const focused = layout.focus === group.id;
   const active = activeViewOf(group);
+
+  // The other way a preview tab is promoted, beside an edit or a click: simply
+  // sitting with it open long enough that you were plainly reading it, not
+  // glancing at it. Restarts whenever the active tab changes, so switching
+  // back to an old preview gives it a fresh clock rather than promoting it on
+  // arrival because time had already passed while it sat unread in the
+  // background.
+  useEffect(() => {
+    if (!active || group.preview !== active.id) return;
+    const timer = window.setTimeout(() => promoteView(active.id), PREVIEW_LINGER_MS);
+    return () => window.clearTimeout(timer);
+  }, [active, group.preview, promoteView]);
+
+  // One view is ordinarily not a tab at all: a strip with a single item in it
+  // is a label you cannot switch away from, and the actions it carried move
+  // into a hover control instead. A lone *preview* tab is the exception — it
+  // is the one case a single view still needs a label, because the label is
+  // what says "this isn't permanent yet".
+  const showTabs = !classic && (group.views.length > 1 || group.preview === active?.id);
 
   return (
     <section
@@ -244,12 +264,10 @@ function GroupView({ group, onDragTab }: { group: GroupNode; onDragTab: DragStar
         if (!focused) focusGroup(group.id);
       }}
     >
-      {/* One view is not a tab: a strip with a single item in it is a label you
-          cannot switch away from. The actions it carried move into a hover
-          control instead, so nothing is lost, only the chrome. Classic mode
-          gets neither — every control on them arranges something it does not
-          have, and the editor area is meant to be nothing but the editor. */}
-      {classic ? null : group.views.length > 1 ? (
+      {/* Classic mode gets neither: every control on them arranges something
+          it does not have, and the editor area is meant to be nothing but the
+          editor. */}
+      {classic ? null : showTabs ? (
         <TabStrip group={group} onDragTab={onDragTab} />
       ) : (
         <TileActions group={group} onDragTab={onDragTab} />
@@ -267,9 +285,11 @@ function GroupView({ group, onDragTab }: { group: GroupNode; onDragTab: DragStar
             <ViewHost view={view} />
           </div>
         ))}
-        {group.views.length === 0 && !narrow && (
-          <p className="tile-empty">Nothing open here.</p>
-        )}
+        {/* An empty tile used to say "Nothing open here", which is a sentence
+            reporting a fact you can already see. The mark says the same thing
+            without words, set a hair off the background so it reads as the
+            surface rather than as content — see `.spark-watermark`. */}
+        {group.views.length === 0 && !narrow && <SparkWatermark />}
       </div>
     </section>
   );
@@ -287,64 +307,133 @@ function TileActions({ group, onDragTab }: { group: GroupNode; onDragTab: DragSt
   const view = activeViewOf(group);
   if (!view || narrow) return null;
 
+  // Spark renders its own window controls — grip, split, float and close —
+  // in `.spark-window-controls`, in the chat area below its header; see
+  // `beginGripDrag` and the cluster in `SparkView.tsx`. The workbench's
+  // corner overlay would cover that header, so a second, hover-only handle
+  // here on top of it is one affordance too many, and a second close button
+  // is worse: two ways to do the same thing, findable at different times.
+  const spark = isSparkView(view);
+
   return (
     <div className="tile-actions" data-window-tabs="">
-      <button
-        className="icon-button tile-grip"
-        data-window-tab=""
-        title={`Move ${titleOf(view)}`}
-        aria-label={`Move ${titleOf(view)}`}
-        onPointerDown={(event) => {
-          if (event.button !== 0) return;
-          const box = event.currentTarget.getBoundingClientRect();
-          onDragTab(event, view.id, {
-            offset: { x: event.clientX - box.left, y: event.clientY - box.top },
-          });
-        }}
-      >
-        <GripIcon />
-      </button>
-      <button
-        className="icon-button"
-        title="Split right"
-        aria-label="Split right"
-        onClick={() => splitFocused('right')}
-      >
-        <SplitIcon />
-      </button>
-      <button
-        className="icon-button"
-        title="Open in a floating window"
-        aria-label="Open in a floating window"
-        onClick={() => moveView(view.id, { kind: 'window', rect: defaultWindowRect() })}
-      >
-        <FloatIcon />
-      </button>
-      <button
-        className="icon-button"
-        title={`Close ${titleOf(view)}`}
-        aria-label={`Close ${titleOf(view)}`}
-        onClick={() => closeView(view.id)}
-      >
-        <CloseIcon />
-      </button>
+      {!spark && (
+        <button
+          className="icon-button tile-grip"
+          data-window-tab=""
+          title={`Move ${titleOf(view)}`}
+          aria-label={`Move ${titleOf(view)}`}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            const box = event.currentTarget.getBoundingClientRect();
+            onDragTab(event, view.id, {
+              offset: { x: event.clientX - box.left, y: event.clientY - box.top },
+            });
+          }}
+        >
+          <GripIcon />
+        </button>
+      )}
+      {/* Split and float are offered to Spark by its own cluster in the chat
+          area (`SparkView.tsx`'s `.spark-window-controls`), so the corner
+          overlay stays off a header it would cover. See AGENTS → "Panels
+          close themselves". */}
+      {!spark && (
+        <button
+          className="icon-button"
+          title="Split right"
+          aria-label="Split right"
+          onClick={() => splitFocused('right')}
+        >
+          <SplitIcon />
+        </button>
+      )}
+      {!spark && (
+        <button
+          className="icon-button"
+          title="Open in a floating window"
+          aria-label="Open in a floating window"
+          onClick={() => moveView(view.id, { kind: 'window', rect: defaultWindowRect() })}
+        >
+          <FloatIcon />
+        </button>
+      )}
+      {!spark && (
+        <button
+          className="icon-button"
+          title={`Close ${titleOf(view)}`}
+          aria-label={`Close ${titleOf(view)}`}
+          onClick={() => closeView(view.id)}
+        >
+          <CloseIcon />
+        </button>
+      )}
     </div>
   );
 }
 
+/** How far a scroll button nudges the strip, in px — a handful of tabs' worth. */
+const TAB_SCROLL_STEP = 160;
+
 function TabStrip({ group, onDragTab }: { group: GroupNode; onDragTab: DragStarter }) {
   const { titleOf, revealView, closeView, moveView, narrow, splitFocused } = useWindows();
   const active = activeViewOf(group);
+  const spark = active !== null && isSparkView(active);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [overflow, setOverflow] = useState({ left: false, right: false });
+
+  const updateOverflow = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setOverflow({
+      left: el.scrollLeft > 1,
+      right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1,
+    });
+  }, []);
+
+  // Re-measured on scroll, on resize, and whenever a tab is added or removed —
+  // the strip's own width or content can change without the element itself
+  // resizing, which is what the tab-count dependency is for.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    updateOverflow();
+    const observer = new ResizeObserver(updateOverflow);
+    observer.observe(el);
+    el.addEventListener('scroll', updateOverflow, { passive: true });
+    return () => {
+      observer.disconnect();
+      el.removeEventListener('scroll', updateOverflow);
+    };
+  }, [updateOverflow, group.views.length]);
 
   return (
     <div className="tabs" data-window-tabs="" role="tablist">
-      <div className="tabs-scroll">
+      {/* Only drawn once there is somewhere to scroll to — a button that does
+          nothing is worse than no button. */}
+      {overflow.left && (
+        <button
+          className="icon-button tabs-scroll-btn"
+          data-side="left"
+          aria-label="Scroll tabs left"
+          onClick={() => scrollRef.current?.scrollBy({ left: -TAB_SCROLL_STEP, behavior: 'smooth' })}
+        >
+          <ChevronLeftIcon />
+        </button>
+      )}
+
+      <div className="tabs-scroll" ref={scrollRef} data-overflowing={overflow.left || overflow.right || undefined}>
         {group.views.map((view) => (
           <div
             key={view.id}
             className="tab"
             data-window-tab=""
             data-active={view.id === active?.id || undefined}
+            // A preview tab is drawn in italic — see `GroupNode.preview` — so
+            // it reads as "this is what you're glancing at", not yet a
+            // committed part of the tab row.
+            data-preview={group.preview === view.id || undefined}
             role="tab"
             aria-selected={view.id === active?.id}
             onPointerDown={(event) => {
@@ -373,7 +462,21 @@ function TabStrip({ group, onDragTab }: { group: GroupNode; onDragTab: DragStart
         ))}
       </div>
 
-      {!narrow && (
+      {overflow.right && (
+        <button
+          className="icon-button tabs-scroll-btn"
+          data-side="right"
+          aria-label="Scroll tabs right"
+          onClick={() => scrollRef.current?.scrollBy({ left: TAB_SCROLL_STEP, behavior: 'smooth' })}
+        >
+          <ChevronRightIcon />
+        </button>
+      )}
+
+      {/* Withheld for Spark exactly as in `TileActions`: it offers its own
+          split and float in `.spark-window-controls` and never leaves its
+          rail through this strip's buttons. */}
+      {!narrow && !spark && (
         <div className="tabs-actions">
           <button
             className="icon-button"
@@ -402,22 +505,46 @@ function TabStrip({ group, onDragTab }: { group: GroupNode; onDragTab: DragStart
 // Sidebars
 // ---------------------------------------------------------------------------
 
-function SidebarRail({ side }: { side: SidebarSide }) {
-  const { layout, setSidebarSize, titleOf, closeView, setSidebarActive, moveView, classic } =
-    useWindows();
+/**
+ * True for exactly the pairing that stacks by default: the navigator and
+ * Places, sharing a rail with nothing else in it. A third view dragged in
+ * beside them — a plugin's panel, a second copy of either — falls back to
+ * tabs, because stacking only makes sense for two panels that both *want* to
+ * be visible together; a heterogeneous rail can't assume that about whatever
+ * else has landed in it.
+ */
+function stackablePair(views: ViewRef[]): boolean {
+  return (
+    views.length === 2 &&
+    views.some((view) => view.type === PLACES_VIEW) &&
+    views.some((view) => view.type === NAVIGATOR_VIEW)
+  );
+}
+
+function SidebarRail({ side, onDragTab }: { side: SidebarSide; onDragTab: DragStarter }) {
+  const { layout, setSidebarSize, titleOf, setSidebarActive, moveView, classic } = useWindows();
   const sidebar = layout.sidebars[side];
   if (!sidebar.open || sidebar.views.length === 0) return null;
 
   const active = sidebar.views[sidebar.active];
   const vertical = side !== 'bottom';
+  const stacked = stackablePair(sidebar.views);
 
   const startResize = (event: React.PointerEvent) => {
     event.preventDefault();
     const start = sidebar.size;
+    // A rail may be dragged well past half the workbench — Spark's own
+    // transcript is exactly the panel that benefits from more room — but it
+    // still has to leave *something* of the tile area, so the cap is a
+    // fraction of the viewport rather than the flat 720px ceiling `model.ts`
+    // enforces as a sanity bound. Read at drag start, not on every move: the
+    // viewport does not change mid-drag, and `model.ts` stays free of DOM
+    // access this way.
+    const max = 0.85 * (vertical ? window.innerWidth : window.innerHeight);
     startPointerDrag(event, {
       onMove: (_native, delta) => {
         const change = side === 'left' ? delta.dx : side === 'right' ? -delta.dx : -delta.dy;
-        setSidebarSize(side, start + change);
+        setSidebarSize(side, Math.min(start + change, max));
       },
     });
   };
@@ -429,60 +556,243 @@ function SidebarRail({ side }: { side: SidebarSide }) {
       data-side={side}
       style={vertical ? { width: `${sidebar.size}px` } : { height: `${sidebar.size}px` }}
     >
-      {sidebar.views.length > 1 && (
-        <div className="sidebar-tabs" role="tablist">
-          {sidebar.views.map((view, index) => (
-            <button
-              key={view.id}
-              className="sidebar-tab"
-              role="tab"
-              aria-selected={index === sidebar.active}
-              onClick={() => setSidebarActive(side, index)}
-            >
-              {titleOf(view)}
-            </button>
-          ))}
-        </div>
+      {stacked ? (
+        <SidebarStack views={sidebar.views} onDragTab={onDragTab} />
+      ) : (
+        <>
+          {sidebar.views.length > 1 && (
+            <div className="sidebar-tabs" role="tablist">
+              {sidebar.views.map((view, index) => (
+                <button
+                  key={view.id}
+                  className="sidebar-tab"
+                  data-window-tab=""
+                  role="tab"
+                  aria-selected={index === sidebar.active}
+                  // A rail's tabs are tabs, and everything else in the app that
+                  // looks like a tab can be dragged somewhere else. Without this the
+                  // only way a panel could leave its rail was the float button, so
+                  // "put the navigator beside my note" was two moves and a window in
+                  // between.
+                  onPointerDown={(event) => {
+                    if (event.button !== 0) return;
+                    setSidebarActive(side, index);
+                    const box = event.currentTarget.getBoundingClientRect();
+                    onDragTab(event, view.id, {
+                      offset: { x: event.clientX - box.left, y: event.clientY - box.top },
+                    });
+                  }}
+                >
+                  {titleOf(view)}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="sidebar-body">{active && <ViewHost view={active} />}</div>
+
+          {/* Spark carries its own window controls — grip, split, float and
+              close — in `.spark-window-controls`, in the chat area below its
+              header, and its header is itself a drag handle. A hover overlay
+              sitting over that header is not just redundant, it is opaque to
+              clicks even at rest: `opacity: 0` does not stop it from
+              intercepting the pointer, so Spark's own buttons underneath this
+              corner were unreachable until you found the exact pixel that
+              reveals it.
+
+              Close is withheld here entirely, for every panel, not only Spark:
+              a rail is where you keep a panel open, and the corner's one job is
+              floating it out — hiding it is what the header toggle and the
+              window's own close are for once it has somewhere else to be. */}
+          {active && !isSparkView(active) && !classic && (
+            <div className="sidebar-actions">
+              <button
+                className="icon-button"
+                aria-label={`Float ${titleOf(active)}`}
+                title="Float this panel"
+                onClick={() =>
+                  moveView(active.id, {
+                    kind: 'window',
+                    // A panel keeps the width it had in the rail, so floating it
+                    // does not also reflow everything inside it.
+                    rect: fitWindow({ x: 32, y: 0, width: Math.max(sidebar.size, 320), height: 620 }),
+                  })
+                }
+              >
+                <FloatIcon />
+              </button>
+            </div>
+          )}
+        </>
       )}
 
-      <div className="sidebar-body">{active && <ViewHost view={active} />}</div>
+      <div className="sidebar-resize" data-side={side} onPointerDown={startResize} />
+    </aside>
+  );
+}
 
-      {active && (
-        <div className="sidebar-actions">
+/** Below this many pixels, dragging the seam collapses the panel it's closing in on, rather than leaving a sliver. */
+const SEAM_COLLAPSE_MARGIN = 40;
+const SEAM_MIN_HEIGHT = 80;
+const PLACES_HEIGHT_DEFAULT = 220;
+
+/**
+ * The navigator and Places, stacked rather than tabbed.
+ *
+ * They used to be one panel with a draggable seam, then two tabs sharing a
+ * rail where only one showed at a time — a click away from the thing you
+ * actually wanted was the cost of splitting them apart. Stacking gets both
+ * back on screen at once while keeping them exactly as separate as they were
+ * as tabs: each is still its own view, found by `locate()` the same way,
+ * closable and floatable on its own, and draggable out of the rail by its own
+ * header — nothing here merges them, it only changes how they're laid out
+ * while they happen to share a rail.
+ *
+ * Places goes on top; the navigator takes whatever is left. The seam between
+ * them is dragged the same way a split divider is, and `nav.placesHeight`,
+ * dead since the panels became peers, is what it now writes to — reviving the
+ * one setting the split-up deliberately orphaned, because the split-up never
+ * argued the seam itself was wrong, only that *the rail* deciding how much
+ * room the journal got was. A person dragging their own seam is not that.
+ * Dragged into either panel's own header, it collapses that panel to just its
+ * title bar instead of leaving a sliver too thin to read — the same state a
+ * click on the title reaches in classic mode, where there is nowhere to drag
+ * a panel *to* and the press is free to mean something else.
+ */
+function SidebarStack({ views, onDragTab }: { views: ViewRef[]; onDragTab: DragStarter }) {
+  const { titleOf, moveView, classic } = useWindows();
+  const ordered = [...views].sort((a, b) => stackRank(a) - stackRank(b));
+  const hostRef = useRef<HTMLDivElement>(null);
+
+  const [placesHeight, setPlacesHeight] = usePersisted('nav.placesHeight', PLACES_HEIGHT_DEFAULT);
+  const [placesCollapsed, setPlacesCollapsed] = usePersisted('sidebar.collapsed.places', false);
+  const [navCollapsed, setNavCollapsed] = usePersisted('sidebar.collapsed.navigator', false);
+
+  const collapsedOf = (view: ViewRef) => (view.type === PLACES_VIEW ? placesCollapsed : navCollapsed);
+  const toggleCollapsed = (view: ViewRef) => {
+    if (view.type === PLACES_VIEW) setPlacesCollapsed(!placesCollapsed);
+    else setNavCollapsed(!navCollapsed);
+  };
+
+  const startSeamDrag = (event: React.PointerEvent) => {
+    event.preventDefault();
+    const host = hostRef.current;
+    if (!host) return;
+    const total = host.getBoundingClientRect().height;
+    const start = placesHeight;
+
+    startPointerDrag(event, {
+      onMove: (_native, delta) => {
+        const next = start + delta.dy;
+        if (next < SEAM_COLLAPSE_MARGIN) {
+          setPlacesCollapsed(true);
+          setNavCollapsed(false);
+          return;
+        }
+        if (next > total - SEAM_COLLAPSE_MARGIN) {
+          setNavCollapsed(true);
+          setPlacesCollapsed(false);
+          return;
+        }
+        setPlacesCollapsed(false);
+        setNavCollapsed(false);
+        setPlacesHeight(Math.min(Math.max(next, SEAM_MIN_HEIGHT), Math.max(total - SEAM_MIN_HEIGHT, SEAM_MIN_HEIGHT)));
+      },
+    });
+  };
+
+  const [places, navigatorView] = ordered;
+
+  const item = (view: ViewRef, style: React.CSSProperties) => {
+    const collapsed = collapsedOf(view);
+    return (
+      <div
+        key={view.id}
+        className="sidebar-stack-item"
+        data-view={view.type === PLACES_VIEW ? 'places' : 'navigator'}
+        data-collapsed={collapsed || undefined}
+        style={style}
+      >
+        <div
+          className="sidebar-stack-head"
+          title={classic ? undefined : `Move ${titleOf(view)}`}
+          // The whole bar is the handle in the ordinary workbench — the tab
+          // strip this replaces was too, one row up — so a press anywhere on
+          // it starts a drag, except on the buttons it carries. Classic mode
+          // has nowhere to drag a panel *to* (no windows, no splits, no other
+          // rail to reach), so the same press collapses the panel instead of
+          // doing nothing.
+          onPointerDown={(event) => {
+            if (event.button !== 0 || classic) return;
+            const box = event.currentTarget.getBoundingClientRect();
+            onDragTab(event, view.id, {
+              offset: { x: event.clientX - box.left, y: event.clientY - box.top },
+            });
+          }}
+          onClick={() => classic && toggleCollapsed(view)}
+        >
+          <span className="sidebar-stack-title">{titleOf(view)}</span>
+          {/* Close is withheld here too — see the unstacked rail's own
+              `.sidebar-actions` for why: the window button is the way out of
+              the rail, and it is enough on its own. */}
           {!classic && (
             <button
               className="icon-button"
-              aria-label={`Float ${titleOf(active)}`}
+              aria-label={`Float ${titleOf(view)}`}
               title="Float this panel"
+              onPointerDown={(event) => event.stopPropagation()}
               onClick={() =>
-                moveView(active.id, {
+                moveView(view.id, {
                   kind: 'window',
-                  // A panel keeps the width it had in the rail, so floating it
-                  // does not also reflow everything inside it.
-                  rect: fitWindow({ x: 32, y: 0, width: Math.max(sidebar.size, 320), height: 620 }),
+                  rect: fitWindow({ x: 32, y: 0, width: 380, height: 620 }),
                 })
               }
             >
               <FloatIcon />
             </button>
           )}
-          {/* The navigator has no close button: hiding it is what the header
-              toggle is for, and a closed rail with nothing in it is a dead end. */}
-          {active.type !== NAVIGATOR_VIEW && (
-            <button
-              className="icon-button"
-              aria-label={`Close ${titleOf(active)}`}
-              onClick={() => closeView(active.id)}
-            >
-              <CloseIcon />
-            </button>
-          )}
         </div>
+        {!collapsed && (
+          <div className="sidebar-stack-body">
+            <ViewHost view={view} />
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // A panel that has given way to its neighbour's collapse takes whatever is
+  // left; a collapsed one shrinks to its own header; the ordinary case is
+  // Places at its dragged height and the navigator filling the rest.
+  const placesStyle: React.CSSProperties = placesCollapsed
+    ? { flex: 'none' }
+    : navCollapsed
+      ? { flex: 1, minHeight: 0 }
+      : { flex: 'none', height: `${placesHeight}px` };
+  const navigatorStyle: React.CSSProperties = navCollapsed ? { flex: 'none' } : { flex: 1, minHeight: 0 };
+
+  return (
+    <div className="sidebar-stack" ref={hostRef}>
+      {item(places, placesStyle)}
+
+      {!placesCollapsed && !navCollapsed && (
+        <div
+          className="sidebar-stack-seam"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize Places"
+          onPointerDown={startSeamDrag}
+        />
       )}
 
-      <div className="sidebar-resize" data-side={side} onPointerDown={startResize} />
-    </aside>
+      {item(navigatorView, navigatorStyle)}
+    </div>
   );
+}
+
+/** Places first, then the navigator — see `SidebarStack`'s docstring. */
+function stackRank(view: ViewRef): number {
+  return view.type === PLACES_VIEW ? 0 : 1;
 }
 
 /**
@@ -493,7 +803,7 @@ function SidebarRail({ side }: { side: SidebarSide }) {
  * content, and everything else about it stays the same.
  */
 function MobileDrawer() {
-  const { layout, toggleSidebar } = useWindows();
+  const { layout, toggleSidebar, setSidebarActive, titleOf } = useWindows();
   const sidebar = layout.sidebars.left;
   const active = sidebar.views[sidebar.active];
   if (!sidebar.open || !active) return null;
@@ -502,6 +812,24 @@ function MobileDrawer() {
     <>
       <div className="scrim" onClick={() => toggleSidebar('left')} />
       <aside className="sidebar" data-side="left" data-drawer="true">
+        {/* The rail's tabs come to the drawer too. Without them the second
+            panel in the rail — Places, normally — would be unreachable on a
+            phone, where there is no rail to see it in. */}
+        {sidebar.views.length > 1 && (
+          <div className="sidebar-tabs" role="tablist">
+            {sidebar.views.map((view, index) => (
+              <button
+                key={view.id}
+                className="sidebar-tab"
+                role="tab"
+                aria-selected={index === sidebar.active}
+                onClick={() => setSidebarActive('left', index)}
+              >
+                {titleOf(view)}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="sidebar-body">
           <ViewHost view={active} />
         </div>
@@ -659,7 +987,9 @@ function FloatingFrame({
               <>
                 {/* Back where it belongs: a panel that lives in a rail returns
                     to its rail, and a document returns beside the tile you are
-                    reading. Sending the navigator into a tab helps nobody. */}
+                    reading. Sending the navigator into a tab helps nobody.
+                    Spark gets the same button as everyone else now that it is
+                    a window like any other — see AGENTS.md → "Spark". */}
                 <button
                   className="icon-button"
                   aria-label="Sidebar this window"

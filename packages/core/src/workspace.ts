@@ -30,6 +30,14 @@ export interface ServerConfig {
    * generated code is a property of the machine, so the UI can only report it.
    */
   sandbox: { runtime: string; describe: string } | null;
+  /**
+   * A one-line finding from Spark's opt-in background scan, unseen so far —
+   * see `apps/server/src/proactive.ts`. `null` when the setting is off, or
+   * on but nothing is due, or the last finding has already been shown. The
+   * "Ask Spark" button badges on this and clears it on the click that opens
+   * the panel.
+   */
+  proactiveFinding: string | null;
 }
 
 /**
@@ -53,6 +61,7 @@ const DEFAULT_CONFIG: ServerConfig = {
   githubAuth: false,
   embeddings: false,
   sandbox: null,
+  proactiveFinding: null,
 };
 
 /**

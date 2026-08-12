@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { pageFolder } from '@spark/core';
 import type { PageMeta } from '@spark/plugin-sdk';
-import { FolderRow, PageRow } from './rows';
+import { FolderRow, PageRow, type RowActions } from './rows';
 import { folderAtPath, type TreeFolder, type TreeNode } from './tree';
 
 /**
@@ -20,6 +20,15 @@ export interface ModeProps {
   onOpen: (page: string, event: React.MouseEvent) => void;
   /** Creates a page inside a folder. */
   onAddPage: (folder: string) => void;
+  /**
+   * Drag, right-click and clipboard state for one row.
+   *
+   * Passed down as a function rather than as three props because every mode
+   * renders the same two row components, and the alternative — each mode
+   * assembling its own handlers — is how three views end up with three subtly
+   * different right-click menus.
+   */
+  rowActions?: (node: { kind: 'page' | 'folder'; path: string }) => RowActions;
 }
 
 // ---------------------------------------------------------------------------
@@ -31,6 +40,7 @@ export function TreeMode({
   currentPage,
   onOpen,
   onAddPage,
+  rowActions,
   expanded,
   onToggle,
 }: ModeProps & {
@@ -55,6 +65,7 @@ export function TreeMode({
             hasPage={node.hasPage}
             onOpenPage={(event) => onOpen(node.path, event)}
             onAddPage={() => onAddPage(node.path)}
+            actions={rowActions?.({ kind: 'folder', path: node.path })}
           />
         ) : (
           <PageRow
@@ -64,6 +75,7 @@ export function TreeMode({
             current={node.path === currentPage}
             title={node.path}
             onOpen={(event) => onOpen(node.path, event)}
+            actions={rowActions?.({ kind: 'page', path: node.path })}
           />
         ),
       )}
@@ -95,10 +107,12 @@ export function ListMode({
   pages,
   currentPage,
   onOpen,
+  rowActions,
 }: {
   pages: PageMeta[];
   currentPage: string | null;
   onOpen: (page: string, event: React.MouseEvent) => void;
+  rowActions?: ModeProps['rowActions'];
 }) {
   if (pages.length === 0) return <Empty />;
 
@@ -114,6 +128,7 @@ export function ListMode({
           current={page.name === currentPage}
           title={page.name}
           onOpen={(event) => onOpen(page.name, event)}
+          actions={rowActions?.({ kind: 'page', path: page.name })}
         />
       ))}
     </div>
@@ -131,7 +146,7 @@ export function ListMode({
  * squeezed into a phone-width rail this is a worse tree, so the switcher hides
  * it rather than letting you choose something that cannot work.
  */
-export function ColumnsMode({ root, currentPage, onOpen, onAddPage }: ModeProps) {
+export function ColumnsMode({ root, currentPage, onOpen, onAddPage, rowActions }: ModeProps) {
   const [path, setPath] = useState('');
 
   const columns = useMemo(() => {
@@ -162,6 +177,7 @@ export function ColumnsMode({ root, currentPage, onOpen, onAddPage }: ModeProps)
                 hasPage={child.hasPage}
                 onOpenPage={(event) => onOpen(child.path, event)}
                 onAddPage={() => onAddPage(child.path)}
+                actions={rowActions?.({ kind: 'folder', path: child.path })}
               />
             ) : (
               <PageRow
@@ -170,6 +186,7 @@ export function ColumnsMode({ root, currentPage, onOpen, onAddPage }: ModeProps)
                 current={child.path === currentPage}
                 title={child.path}
                 onOpen={(event) => onOpen(child.path, event)}
+                actions={rowActions?.({ kind: 'page', path: child.path })}
               />
             ),
           )}

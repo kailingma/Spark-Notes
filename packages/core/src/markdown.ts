@@ -178,7 +178,7 @@ export const TASK_RE = /^(\s*)([-*+])\s+\[([ xX])\]\s?(.*)$/;
 const DUE_RE = /(?:📅\s*|due:)(\d{4}-\d{2}-\d{2})/;
 const TAG_RE = /(?:^|\s)#([A-Za-z0-9][\w/-]*)/g;
 
-/** Extracts every task line from a page. Fenced code blocks are skipped. */
+/** Extracts every task line from a page. Fenced code blocks and empty checkboxes are skipped. */
 export function parseTasks(page: string, text: string): Task[] {
   const tasks: Task[] = [];
   const lines = text.split('\n');
@@ -207,6 +207,9 @@ export function parseTasks(page: string, text: string): Task[] {
       .replace(DUE_RE, '')
       .replace(/\s+/g, ' ')
       .trim();
+    // A checkbox with nothing after it (`- [ ]` alone, or a line that only
+    // carries a due marker) is a placeholder, not a task — don't surface it.
+    if (!cleaned) continue;
 
     tasks.push({
       id: `${page}:${line}`,

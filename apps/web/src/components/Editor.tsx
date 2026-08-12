@@ -2,8 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ConflictError, isValidPageName, normalizePageName } from '@spark/core';
 import type { SparkEditor } from '@spark/editor';
 import { useApp } from '../app-context';
+import { EMOJI_SHORTCODES } from './pickers';
+import { seedJournalPage } from '../lib/journal-template';
 import { forgetCachedPage, readCachedPage, writeCachedPage } from '../lib/page-cache';
 import { tagPageName } from '../virtual';
+import { filesApi } from '../lib/spark-client';
+import { describeUpload, markdownLinkFor, uploadFiles } from '../lib/uploads';
 
 export type SaveState = 'saved' | 'dirty' | 'saving' | 'error';
 
@@ -14,6 +18,13 @@ interface EditorProps {
   onSaveState: (state: SaveState) => void;
   /** Fires with the document text on load and on every change. */
   onText?: (text: string) => void;
+  /**
+   * A genuine edit — never on load, never on a write landing from elsewhere.
+   * `onText` fires for both of those too, which is exactly wrong for a
+   * signal meant to promote a preview tab out of preview: a page that was
+   * only ever loaded, not typed in, has not stopped being a glance.
+   */
+  onEdit?: () => void;
 }
 
 /**
@@ -23,7 +34,7 @@ interface EditorProps {
  * debounced and also fires on blur and on page hide, so nothing is ever lost to
  * a closed tab — there is no save button because there shouldn't need to be one.
  */
-export function Editor({ page, autofocus, onEditor, onSaveState, onText }: EditorProps) {
+export function Editor({ page, autofocus, onEditor, onSaveState, onText, onEdit }: EditorProps) {
   const { workspace, toast, openPage, pages, pendingLine, preferences } = useApp();
   const hostRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<SparkEditor | null>(null);
@@ -34,11 +45,24 @@ export function Editor({ page, autofocus, onEditor, onSaveState, onText }: Edito
   const onTextRef = useRef(onText);
   onTextRef.current = onText;
 
+  const onEditRef = useRef(onEdit);
+  onEditRef.current = onEdit;
+
   // Read through a ref for the same reason: the save timer is armed from a
   // callback that must not be rebuilt, and the delay should take effect from
   // the next keystroke rather than on a remount.
   const autosaveDelay = useRef(preferences.autosaveDelay);
   autosaveDelay.current = preferences.autosaveDelay;
+
+  // `autofocus` is "this tile has focus", so it changes every time you click
+  // into another tile or into Spark — and a dependency here reaches `loadPage`,
+  // which reaches the page effect, which reloads the page and calls `setPage`.
+  // That replaces the whole editor state: the caret jumps to the top of the
+  // document and every decoration is rebuilt from scratch, so the markdown
+  // flashes back to its raw form for a frame. It is read at the moment a load
+  // lands, which is also when the answer should be current.
+  const autofocusRef = useRef(autofocus);
+  autofocusRef.current = autofocus;
 
   const behaviourRef = useRef({
     continueLists: preferences.continueLists,
@@ -149,6 +173,7 @@ export function Editor({ page, autofocus, onEditor, onSaveState, onText }: Edito
     (text: string) => {
       pendingText.current = text;
       onTextRef.current?.(text);
+      onEditRef.current?.();
       onSaveState('dirty');
       if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
       saveTimer.current = window.setTimeout(() => void flush(), autosaveDelay.current);
@@ -181,7 +206,7 @@ export function Editor({ page, autofocus, onEditor, onSaveState, onText }: Edito
         }
         workspace.tasks.update(name, text);
         onSaveState('saved');
-        if (autofocus) editor.focus();
+        if (autofocusRef.current) editor.focus();
       };
 
       // What we already have, drawn straight away. A page you read a minute ago
@@ -198,10 +223,13 @@ export function Editor({ page, autofocus, onEditor, onSaveState, onText }: Edito
           rev = page.rev;
           writeCachedPage(name, page.text, page.rev);
         } catch {
-          // A page that doesn't exist yet is simply an empty one. An empty base
-          // revision says "create it"; writing to it creates the file, and
-          // navigating away without typing leaves no trace.
+          // A page that doesn't exist yet is simply an empty one — unless it
+          // is a fresh journal page and some template opted itself in for the
+          // day, in which case "empty" is that template, rendered. The base
+          // revision is still `''`: nothing is written until the person does
+          // something with what's now on screen, same as an empty page.
           forgetCachedPage(name);
+          text = await seedJournalPage(workspace, name);
         }
         if (isCancelled() || !editorRef.current) return;
 
@@ -230,7 +258,7 @@ export function Editor({ page, autofocus, onEditor, onSaveState, onText }: Edito
       workspace.events.emit('page:open', { page: name });
       return load;
     },
-    [workspace, onSaveState, autofocus, pendingLine],
+    [workspace, onSaveState, pendingLine],
   );
 
   // -- mount ----------------------------------------------------------------
@@ -255,7 +283,7 @@ export function Editor({ page, autofocus, onEditor, onSaveState, onText }: Edito
         page: currentPage.current,
         doc: '',
         placeholder: 'Start writing…',
-        autofocus,
+        autofocus: autofocusRef.current,
         onChange: scheduleSave,
         onSave: () => void flush(),
 
@@ -277,7 +305,25 @@ export function Editor({ page, autofocus, onEditor, onSaveState, onText }: Edito
         },
         decorators: () => workspace.registry.decorators(),
         pages: () => pageNamesRef.current,
+        emoji: () => EMOJI_SHORTCODES,
         behaviour: behaviourRef.current,
+        // `files/` paths in the document are relative to the space, not to the
+        // URL the app is at — without this, `![](files/scan.png)` resolves
+        // against `/p/whatever` and 404s.
+        resolveAsset: (src) => (src.startsWith('files/') ? filesApi.url(src) : src),
+        // A file dropped on the note goes through the same upload path as the
+        // picker, and the markdown link lands where it was dropped. `insert`
+        // clamps the position, so the drop survives any edit that happened
+        // while the upload was in flight.
+        onDropFiles: (files, pos) => {
+          void (async () => {
+            const outcome = await uploadFiles(files);
+            const links = outcome.stored.map(markdownLinkFor).join('\n');
+            if (links) editorRef.current?.insert(links, pos);
+            const said = describeUpload(outcome);
+            toast(said.message, said.ok ? 'success' : 'error');
+          })();
+        },
       });
 
       editorRef.current = editor;

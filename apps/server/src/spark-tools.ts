@@ -1,8 +1,17 @@
 import { parseTasks } from '@spark/core/markdown';
+import { findInPastChats } from './chat-retrieval.js';
+import { searchProviderMeta } from './search-providers.js';
+import { webSearch, webSearchEnabled } from './web-search.js';
 import type { FileStore } from './files.js';
 import type { MemoryStore } from './memory.js';
 import { find } from './retrieval.js';
-import { runCode, sandboxEnabled, sandboxRuntime } from './sandbox.js';
+import {
+  listWorkDir,
+  readWorkFile,
+  runCode,
+  sandboxEnabled,
+  sandboxRuntime,
+} from './sandbox.js';
 import { skills } from './skills.js';
 import type { FileSpace } from './space.js';
 
@@ -55,8 +64,66 @@ export const PERMISSION_MEANS: Record<keyof ToolPermissions, string> = {
   run: 'run code',
 };
 
-/** Something for the browser to do once the turn is over. */
-export type SparkAction = { kind: 'open'; page: string };
+/**
+ * How much of the work happens without being asked about.
+ *
+ * A separate axis from `ToolPermissions`, and the distinction is the point.
+ * Permissions answer "may Spark ever do this", and are enforced by *withholding
+ * the tool* — a model cannot be talked into a capability it was never handed.
+ * The mode answers "must it check with me first", and is enforced by *pausing*.
+ * Neither can stand in for the other: withholding cannot express "yes, but tell
+ * me each time", and pausing cannot express "never, whatever you say".
+ *
+ * The four modes are a ladder, each one pre-approving a class the one below asks
+ * about:
+ *
+ * - `manual` — every tool call waits for a yes.
+ * - `code` — manual, except that running code and looking in the working
+ *   directory go ahead. This is the mode for "do the arithmetic, ask before
+ *   touching my notes".
+ * - `edit` — reading, writing and running go ahead; deleting, renaming and
+ *   overwriting still ask. Everything except the edits you cannot check by
+ *   reading the result.
+ * - `auto` — nothing asks.
+ */
+export type PermissionMode = 'manual' | 'code' | 'edit' | 'auto';
+
+export const PERMISSION_MODES: PermissionMode[] = ['manual', 'code', 'edit', 'auto'];
+
+export function isPermissionMode(value: unknown): value is PermissionMode {
+  return typeof value === 'string' && (PERMISSION_MODES as string[]).includes(value);
+}
+
+/** Tools that are "code": the sandbox and the directory it works in. */
+const CODE_TOOLS = new Set(['run_code', 'list_workspace', 'read_workspace_file']);
+
+/**
+ * Whether a tool has to be approved before it runs, under a given mode.
+ *
+ * Keyed on the tool's declared `needs` rather than on a list of names, so a tool
+ * added later lands in the right class by saying what it needs — which is the
+ * only way a rule like this stays true.
+ */
+export function needsApproval(tool: SparkTool, mode: PermissionMode): boolean {
+  if (mode === 'auto') return false;
+  if (CODE_TOOLS.has(tool.name)) return mode === 'manual';
+  if (mode === 'edit') return tool.needs === 'destroy';
+  // `manual` and `code` both ask about everything else, reading included: the
+  // mode is called manual because it means manual.
+  return true;
+}
+
+/**
+ * Something for the browser to do, as soon as the tool call that queued it
+ * finishes — not batched to the end of the turn.
+ *
+ * `present` rather than `open`: the page is shown as a card in the
+ * conversation, with a button to open it, *and* attached to the conversation
+ * as context, so the next thing the person says about "it" is about the page
+ * that was just shown — without the disruption of the app yanking their
+ * focus onto a note they did not ask to read.
+ */
+export type SparkAction = { kind: 'present'; page: string };
 
 export interface ToolContext {
   space: FileSpace;
@@ -64,7 +131,22 @@ export interface ToolContext {
   actions: SparkAction[];
   memory: MemoryStore;
   files: FileStore;
+  /** The conversation this turn belongs to — so `search_past_chats` can exclude it from its own results. */
+  chatId: string;
   signal?: AbortSignal;
+}
+
+/** One source a retrieval-shaped tool actually drew from, for the transcript to link to. */
+export interface ToolCitation {
+  /** What to show — a page name and heading, a chat title, a URL's own title. */
+  label: string;
+  /** Opens this page at this line, for a `find` hit. */
+  page?: string;
+  line?: number;
+  /** Opens this chat, for a `search_past_chats` hit. */
+  chatId?: string;
+  /** Opens this URL, for a `web_search` result. */
+  url?: string;
 }
 
 export interface ToolResult {
@@ -72,6 +154,21 @@ export interface ToolResult {
   summary: string;
   /** What goes back to the model. */
   detail: string;
+  /**
+   * Pages this call touched, so the transcript line can link to them.
+   *
+   * Named separately rather than parsed back out of `summary`: the summary is
+   * prose meant for a person, and a regular expression over quoted fragments of
+   * it would find page names in some tools and section headings in others.
+   */
+  pages?: string[];
+  /**
+   * The passages/results a retrieval tool actually returned — `find`,
+   * `search_past_chats`, `web_search` — so a reply that leans on one of
+   * them can be checked against its source without re-running the search.
+   * Best-effort: absent for every tool that isn't itself retrieval.
+   */
+  citations?: ToolCitation[];
 }
 
 export interface SparkTool {
@@ -106,6 +203,32 @@ const str = (value: unknown, field: string): string => {
   }
   return value;
 };
+
+/**
+ * Memory is written through the memory tools and nowhere else.
+ *
+ * Two reasons, and the first is a hole this closes. `remember` is a separate
+ * permission precisely so someone can let Spark edit their notes without letting
+ * it form a view about them — but the memory files *are* pages, so
+ * `append_to_page` would have reached them under `write` alone and walked
+ * straight around the switch.
+ *
+ * The second is the same one-writer rule the rest of the app follows: `memory.ts`
+ * owns the format, the caps and the dedup, and a page tool writing raw markdown
+ * into `memory/threads` would produce lines that parse back as something else.
+ *
+ * A person who wants to edit these by hand still can — in the editor, in vim, or
+ * on the Memory page. This only governs Spark.
+ */
+function refuseMemoryPage(name: string): void {
+  if (!/^memory(\/|$)/i.test(name.trim().replace(/^\/+/, ''))) return;
+  // Careful not to name the memory tools here: this refusal is reached most often
+  // when `remember` is off, and pointing at tools that were withheld produces a
+  // reply that offers to do the thing it cannot do.
+  throw new Error(
+    'The pages under "memory/" are memory, not notes, and the page tools do not write to them — the memory tools do, if you were given them. If you have not been, say that changing memory is switched off, and that the Memory page and the editor are both ways they can change it themselves.',
+  );
+}
 
 export const SPARK_TOOLS: SparkTool[] = [
   {
@@ -156,6 +279,45 @@ export const SPARK_TOOLS: SparkTool[] = [
       return {
         summary: `Read “${page.name}”`,
         detail: text || '(the page is empty)',
+        pages: [page.name],
+      };
+    },
+  },
+
+  {
+    name: 'list_directories',
+    description:
+      'The folders at the top of the space, with how many pages are in each. Read this first when you need to know how the space is organised — where a new page belongs, or what kind of place this is. Cheaper than listing every page, and it is the shape of the space rather than its contents.',
+    schema: { type: 'object', properties: {} },
+    async run(_input, ctx) {
+      const pages = await ctx.space.list();
+      const folders = await ctx.space.listFolders();
+
+      // Counted per top-level segment, including pages nested deeper: "journal has
+      // 240 pages" is the useful fact, and "journal/2026 has 12" is a level of
+      // detail that belongs to a later `list_pages`.
+      const counts = new Map<string, number>();
+      let loose = 0;
+      for (const page of pages) {
+        const slash = page.name.indexOf('/');
+        if (slash === -1) loose += 1;
+        else counts.set(page.name.slice(0, slash), (counts.get(page.name.slice(0, slash)) ?? 0) + 1);
+      }
+      // An empty folder someone just made is still a folder, and is often exactly
+      // the answer to "where does this go".
+      for (const folder of folders) {
+        const top = folder.split('/')[0];
+        if (!counts.has(top)) counts.set(top, 0);
+      }
+
+      const rows = [...counts.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .map(([name, count]) => `${name}/ — ${count} page${count === 1 ? '' : 's'}${describeFolder(name)}`);
+      if (loose > 0) rows.push(`(and ${loose} page${loose === 1 ? '' : 's'} at the top level)`);
+
+      return {
+        summary: `Listed ${counts.size} top-level folder${counts.size === 1 ? '' : 's'}`,
+        detail: rows.length === 0 ? 'The space has no folders yet.' : rows.join('\n'),
       };
     },
   },
@@ -210,6 +372,7 @@ export const SPARK_TOOLS: SparkTool[] = [
     },
     async run(input, ctx) {
       const name = str(input.name, 'name');
+      refuseMemoryPage(name);
       const content = typeof input.content === 'string' ? input.content : '';
       if (await ctx.space.exists(name)) {
         throw new Error(`"${name}" already exists. Read it first, then edit it if that is what you meant.`);
@@ -217,8 +380,12 @@ export const SPARK_TOOLS: SparkTool[] = [
       // An empty base revision means "create"; the space refuses if the file
       // appeared between the check above and this write.
       const page = await ctx.space.write(name, ensureTrailingNewline(content), '');
-      ctx.actions.push({ kind: 'open', page: page.name });
-      return { summary: `Created “${page.name}”`, detail: `Created ${page.name} (${page.size} bytes).` };
+      ctx.actions.push({ kind: 'present', page: page.name });
+      return {
+        summary: `Created “${page.name}”`,
+        detail: `Created ${page.name} (${page.size} bytes). It has already been presented to them as a card in the conversation, so you do not need to present it again.`,
+        pages: [page.name],
+      };
     },
   },
 
@@ -234,6 +401,7 @@ export const SPARK_TOOLS: SparkTool[] = [
     },
     async run(input, ctx) {
       const name = str(input.name, 'name');
+      refuseMemoryPage(name);
       const addition = str(input.content, 'content');
 
       let existing = '';
@@ -250,7 +418,11 @@ export const SPARK_TOOLS: SparkTool[] = [
       const body = existing.trimEnd();
       const next = body ? `${body}\n\n${addition.trim()}\n` : `${addition.trim()}\n`;
       const page = await ctx.space.write(name, next, rev);
-      return { summary: `Added to “${page.name}”`, detail: `Appended ${addition.length} characters to ${page.name}.` };
+      return {
+        summary: `Added to “${page.name}”`,
+        detail: `Appended ${addition.length} characters to ${page.name}.`,
+        pages: [page.name],
+      };
     },
   },
 
@@ -271,6 +443,7 @@ export const SPARK_TOOLS: SparkTool[] = [
     },
     async run(input, ctx) {
       const name = str(input.name, 'name');
+      refuseMemoryPage(name);
       const find = str(input.find, 'find');
       const replace = typeof input.replace === 'string' ? input.replace : '';
       const all = input.all === true;
@@ -294,6 +467,7 @@ export const SPARK_TOOLS: SparkTool[] = [
       return {
         summary: `Edited “${written.name}”`,
         detail: `Replaced ${all ? occurrences : 1} occurrence(s) in ${written.name}.`,
+        pages: [written.name],
       };
     },
   },
@@ -310,12 +484,14 @@ export const SPARK_TOOLS: SparkTool[] = [
     },
     async run(input, ctx) {
       const name = str(input.name, 'name');
+      refuseMemoryPage(name);
       const content = typeof input.content === 'string' ? input.content : '';
       const page = await ctx.space.read(name);
       const written = await ctx.space.write(name, ensureTrailingNewline(content), page.rev);
       return {
         summary: `Rewrote “${written.name}”`,
         detail: `Replaced the contents of ${written.name}.`,
+        pages: [written.name],
       };
     },
   },
@@ -332,8 +508,14 @@ export const SPARK_TOOLS: SparkTool[] = [
     async run(input, ctx) {
       const from = str(input.from, 'from');
       const to = str(input.to, 'to');
+      refuseMemoryPage(from);
+      refuseMemoryPage(to);
       await ctx.space.rename(from, to);
-      return { summary: `Renamed “${from}” to “${to}”`, detail: `Renamed ${from} to ${to}.` };
+      return {
+        summary: `Renamed “${from}” to “${to}”`,
+        detail: `Renamed ${from} to ${to}.`,
+        pages: [to],
+      };
     },
   },
 
@@ -349,6 +531,7 @@ export const SPARK_TOOLS: SparkTool[] = [
     },
     async run(input, ctx) {
       const name = str(input.name, 'name');
+      refuseMemoryPage(name);
       if (!(await ctx.space.exists(name))) throw new Error(`"${name}" does not exist.`);
       await ctx.space.delete(name);
       return { summary: `Deleted “${name}”`, detail: `Deleted ${name}.` };
@@ -419,14 +602,15 @@ export const SPARK_TOOLS: SparkTool[] = [
       return {
         summary: `${done ? 'Completed' : 'Reopened'} a task in “${name}”`,
         detail: `${name}:${line} is now ${done ? 'done' : 'open'}.`,
+        pages: [name],
       };
     },
   },
 
   {
-    name: 'open_page',
+    name: 'present_page',
     description:
-      'Bring a page up in front of the person you are talking to. Use it after creating something, so they can see it, rather than pasting the whole thing back into the conversation.',
+      'Show a page to the person you are talking to, as a card in the conversation with a button they can open it from. Use it instead of pasting a page back into the conversation, and after writing something so they can read what you wrote. Presenting also attaches the page to the conversation, so anything they say next about "it" is about this page — which is why this is better than describing what you did. It does not open the page itself; opening it is their choice.',
     schema: {
       type: 'object',
       properties: { name: { type: 'string' } },
@@ -434,8 +618,12 @@ export const SPARK_TOOLS: SparkTool[] = [
     },
     async run(input, ctx) {
       const name = str(input.name, 'name');
-      ctx.actions.push({ kind: 'open', page: name });
-      return { summary: `Opened “${name}”`, detail: `${name} is now on screen.` };
+      ctx.actions.push({ kind: 'present', page: name });
+      return {
+        summary: `Presented “${name}”`,
+        detail: `${name} is now shown as a card in the conversation, attached to it, for them to open when they choose.`,
+        pages: [name],
+      };
     },
   },
 
@@ -477,6 +665,58 @@ export const SPARK_TOOLS: SparkTool[] = [
       return {
         summary: `Found ${result.hits.length} passage${result.hits.length === 1 ? '' : 's'} for “${query}”${result.semantic ? '' : ' (text only)'}`,
         detail: [result.note, ...passages].filter(Boolean).join('\n\n'),
+        citations: result.hits.map((hit) => ({
+          label: hit.heading ? `${hit.page} › ${hit.heading}` : hit.page,
+          page: hit.page,
+          line: hit.line,
+        })),
+      };
+    },
+  },
+
+  {
+    name: 'search_past_chats',
+    description:
+      'Search other conversations you have had with this person — not this one, and not their notes — for something they referenced, asked about before, or that would help answer what they are asking now. Use it when they say things like "like we discussed before", "what did you say about X last time", or when recalling an earlier conversation would plainly help and the notes would not have it, since a conversation is not a note. Ranked by meaning as well as by words, the same as "find".',
+    // Read-only recall of the person's own transcript history — the same
+    // class of action as `search`/`find`, not something that forms a
+    // belief about them the way `remember` does, so it needs no permission
+    // gate of its own.
+    schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'A phrase or a question, in the person\'s own terms.' },
+        limit: { type: 'number', description: 'Passages to return (default 6, max 20).' },
+      },
+      required: ['query'],
+    },
+    async run(input, ctx) {
+      const query = str(input.query, 'query');
+      const result = await findInPastChats(query, ctx.chatId, {
+        limit: Math.min(Number(input.limit) || 6, 20),
+        signal: ctx.signal,
+      });
+
+      if (result.hits.length === 0) {
+        return {
+          summary: `Found nothing in past conversations for “${query}”`,
+          detail: `No passage matched.${result.note ? ` (${result.note})` : ''}`,
+        };
+      }
+
+      const passages = result.hits.map((hit) => `--- “${hit.heading}”\n${hit.text}`);
+
+      return {
+        summary: `Found ${result.hits.length} passage${result.hits.length === 1 ? '' : 's'} in past conversations for “${query}”${result.semantic ? '' : ' (text only)'}`,
+        detail: [result.note, ...passages].filter(Boolean).join('\n\n'),
+        // `chunkChat` (chat-retrieval.ts) names a hit's page `chat:<id>` —
+        // the id is lifted back out here rather than carried as a separate
+        // field on `Hit`, which would mean widening the shape `find()`'s
+        // note-taking pages share too, for one caller.
+        citations: result.hits.map((hit) => ({
+          label: hit.heading ?? 'Untitled conversation',
+          chatId: hit.page.replace(/^chat:/, ''),
+        })),
       };
     },
   },
@@ -662,8 +902,12 @@ export const SPARK_TOOLS: SparkTool[] = [
         when: typeof input.when === 'string' ? input.when : undefined,
         body: str(input.body, 'body'),
       });
-      ctx.actions.push({ kind: 'open', page: written.page });
-      return { summary: `Wrote the “${name}” skill`, detail: `Saved to ${written.page}.` };
+      ctx.actions.push({ kind: 'present', page: written.page });
+      return {
+        summary: `Wrote the “${name}” skill`,
+        detail: `Saved to ${written.page}.`,
+        pages: [written.page],
+      };
     },
   },
 
@@ -717,13 +961,107 @@ export const SPARK_TOOLS: SparkTool[] = [
   },
 
   // -------------------------------------------------------------------------
-  // Code
+  // The web
   // -------------------------------------------------------------------------
+
+  {
+    name: 'web_search',
+    description:
+      'Search the web and get back what each matching page said about the topic — the page text where the configured search engine returns it, otherwise its snippet. Use it for anything the notes cannot answer because it is outside them: a fact, a definition, what a library does now, what happened. Say where each claim came from. Do not use it for questions about their own notes — that is what "find" is for. When the results are snippets rather than full text, say that you only saw snippets and offer to fetch the page.',
+    // Capability rather than permission: with no configured provider the tool
+    // cannot work, and a model told it can search will promise to and then
+    // apologise.
+    available: webSearchEnabled,
+    schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'What to look up, phrased as you would to a search engine or as a question.' },
+        limit: { type: 'number', description: 'Results to read (default 5, max 10).' },
+      },
+      required: ['query'],
+    },
+    async run(input, ctx) {
+      const query = str(input.query, 'query');
+      const { results, engine: engineId, fellBackFrom } = await webSearch(query, {
+        limit: Number(input.limit) || 5,
+        signal: ctx.signal,
+      });
+      // The engine that actually answered, not necessarily the configured
+      // active one — a fallback took over if `fellBackFrom` is set, and the
+      // summary has to say that plainly rather than name the engine that
+      // failed as if it had answered.
+      const engine = searchProviderMeta(engineId)?.label ?? 'web search';
+      const via = fellBackFrom
+        ? ` (${searchProviderMeta(fellBackFrom)?.label ?? fellBackFrom} didn't answer, so this used ${engine} instead)`
+        : '';
+
+      if (results.length === 0) {
+        return { summary: `Searched ${engine} for “${query}”${via} — nothing`, detail: 'No results.' };
+      }
+
+      return {
+        summary: `Searched ${engine} for “${query}”${via} — ${results.length} result${results.length === 1 ? '' : 's'}`,
+        detail: results
+          .map(
+            (result) =>
+              `--- ${result.title}\n${result.url}${result.published ? ` (${result.published})` : ''}\n${result.text}`,
+          )
+          .join('\n\n'),
+        citations: results.map((result) => ({ label: result.title, url: result.url })),
+      };
+    },
+  },
+
+  // -------------------------------------------------------------------------
+  // Code, and the directory it runs in
+  // -------------------------------------------------------------------------
+
+  {
+    name: 'list_workspace',
+    description:
+      'List what is in your working directory. It survives between runs, so this is how you find out what an earlier script left behind rather than guessing at a filename.',
+    needs: 'run',
+    available: sandboxEnabled,
+    schema: { type: 'object', properties: {} },
+    async run() {
+      const entries = await listWorkDir();
+      return {
+        summary: `Listed ${entries.length} file${entries.length === 1 ? '' : 's'} in the workspace`,
+        detail:
+          entries.length === 0
+            ? 'The working directory is empty.'
+            : entries
+                .map(
+                  (entry) =>
+                    `${entry.name} — ${Math.ceil(entry.size / 1024)} kB, written ${new Date(entry.modified).toISOString()}`,
+                )
+                .join('\n'),
+      };
+    },
+  },
+
+  {
+    name: 'read_workspace_file',
+    description:
+      'Read a text file out of your working directory — a result an earlier script wrote, a CSV you assembled. For anything that is not text, have a script print what you need instead.',
+    needs: 'run',
+    available: sandboxEnabled,
+    schema: {
+      type: 'object',
+      properties: { name: { type: 'string', description: 'Path relative to the working directory.' } },
+      required: ['name'],
+    },
+    async run(input) {
+      const name = str(input.name, 'name');
+      const text = await readWorkFile(name);
+      return { summary: `Read ${name} from the workspace`, detail: text || '(the file is empty)' };
+    },
+  },
 
   {
     name: 'run_code',
     description:
-      'Run a short Python or JavaScript program and get its output back. This is for the questions about a folder of markdown that are arithmetic rather than reading: totalling a column, counting across months, reshaping a CSV, working out dates. Reason about text yourself; compute numbers here, because a total you worked out in your head is a total you might have got wrong. Name the pages or files the script needs in "files" and they appear in the working directory as plain files — do not go looking for the space by path, because whether that even works depends on how the server is set up. Anything the script writes to "out/" is saved as an attachment. Print what you want to see; nothing else comes back.',
+      'Run a short Python or JavaScript program and get its output back. This is for the questions about a folder of markdown that are arithmetic rather than reading: totalling a column, counting across months, reshaping a CSV, working out dates. Reason about text yourself; compute numbers here, because a total you worked out in your head is a total you might have got wrong. Name the pages or files the script needs in "files" and they appear in the working directory as plain files — do not go looking for the space by path, because whether that even works depends on how the server is set up. The working directory is yours and survives between runs, so a long job can be done in steps: write an intermediate file, then read it back next time. Anything the script writes to "out/" is saved as an attachment. Print what you want to see; nothing else comes back.',
     needs: 'run',
     available: sandboxEnabled,
     schema: {
@@ -755,6 +1093,9 @@ export const SPARK_TOOLS: SparkTool[] = [
       // Read what was asked for, from the attachments or from the space. A name
       // that resolves to neither is reported rather than silently absent, so the
       // model does not debug a script whose input was never there.
+      // Each file keeps the name it was asked for, so the script opens it under
+      // the name the model already knows. A page gains `.md`, which is what it is
+      // called on disk.
       const files: Array<{ name: string; bytes: Uint8Array }> = [];
       const absent: string[] = [];
       for (const name of wanted) {
@@ -764,7 +1105,7 @@ export const SPARK_TOOLS: SparkTool[] = [
             files.push({ name, bytes });
           } else {
             const page = await ctx.space.read(name);
-            files.push({ name: `${name.split('/').pop()}.md`, bytes: Buffer.from(page.text, 'utf8') });
+            files.push({ name: `${name}.md`, bytes: Buffer.from(page.text, 'utf8') });
           }
         } catch {
           absent.push(name);
@@ -773,28 +1114,51 @@ export const SPARK_TOOLS: SparkTool[] = [
 
       const result = await runCode({ language, code, files });
 
+      const provided =
+        files.length > 0
+          ? `Files placed in the working directory for this run: ${files.map((file) => file.name).join(', ')}.`
+          : // Said only on failure, and worth saying: the commonest first mistake
+            // is a script that opens a file it never asked to be given. The
+            // directory persists, so the advice is now "look" as well as "ask".
+            'Nothing was placed in the working directory this run, because "files" was empty. A page or an attachment the script needs has to be named there; anything an earlier run left behind is still there and list_workspace will show it.';
+      const missing = absent.length > 0 ? `Not found, so not provided: ${absent.join(', ')}.` : '';
+
+      // A script that failed is a failed step, not a successful tool call that
+      // happened to return an error. Throwing is how every other tool here
+      // reports failure, and it is what puts a red line in the transcript rather
+      // than a green one the person has to read to discover went wrong.
+      if (!result.ok) {
+        throw new Error(
+          [
+            result.timedOut
+              ? 'The script was killed for running too long.'
+              : 'The script exited with an error.',
+            missing,
+            provided,
+            result.stdout.trim() ? `stdout:\n${result.stdout.trim()}` : '',
+            result.stderr.trim() ? `stderr:\n${result.stderr.trim()}` : '',
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
+        );
+      }
+
       const saved: string[] = [];
       for (const produced of result.produced) {
         const stored = await ctx.files.save(produced.name, produced.bytes);
         saved.push(stored.name);
       }
 
-      const detail = [
-        absent.length > 0 ? `These could not be found and were not provided: ${absent.join(', ')}.` : '',
-        result.stdout.trim() ? `stdout:\n${result.stdout.trim()}` : '(no output)',
-        result.stderr.trim() ? `stderr:\n${result.stderr.trim()}` : '',
-        saved.length > 0 ? `Saved: ${saved.join(', ')}` : '',
-      ]
-        .filter(Boolean)
-        .join('\n\n');
-
       return {
-        summary: result.timedOut
-          ? 'Code timed out'
-          : result.ok
-            ? `Ran ${language}${saved.length > 0 ? ` — produced ${saved.length} file${saved.length === 1 ? '' : 's'}` : ''}`
-            : `${language} exited with an error`,
-        detail,
+        summary: `Ran ${language}${saved.length > 0 ? ` — produced ${saved.length} file${saved.length === 1 ? '' : 's'}` : ''}`,
+        detail: [
+          missing,
+          result.stdout.trim() ? `stdout:\n${result.stdout.trim()}` : '(the script printed nothing)',
+          result.stderr.trim() ? `stderr:\n${result.stderr.trim()}` : '',
+          saved.length > 0 ? `Saved as: ${saved.join(', ')}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
       };
     },
   },
@@ -821,6 +1185,32 @@ export const sandboxState = (): { enabled: boolean; runtime: string } => ({
 
 export function findTool(name: string): SparkTool | undefined {
   return SPARK_TOOLS.find((tool) => tool.name === name);
+}
+
+/**
+ * The four folders that are not notes, named where they appear.
+ *
+ * Said in the listing rather than only in the system prompt, because this is the
+ * moment it matters: a model that has just been shown `_plugins/` and `memory/`
+ * beside `projects/` will otherwise treat all three as places to file a page.
+ */
+function describeFolder(name: string): string {
+  switch (name.toLowerCase()) {
+    case 'memory':
+      return ' — your memory about them. Not notes; use the memory tools.';
+    case '_skills':
+      return ' — the skills. Written with write_skill, read with read_skill.';
+    case '_plugins':
+      return ' — their own code, which extends the app. Leave it alone unless asked.';
+    case 'files':
+      return ' — attachments. Use list_files and read_file.';
+    case 'journal':
+      return ' — the daily pages.';
+    case 'ai':
+      return ' — where your own work goes unless a better home is obvious.';
+    default:
+      return '';
+  }
 }
 
 function countOccurrences(haystack: string, needle: string): number {

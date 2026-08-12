@@ -38,9 +38,17 @@ export interface DropResolution {
 }
 
 /** How close to an edge counts as "against it", as a fraction of the tile. */
-const SPLIT_BAND = 0.24;
-/** How close to the workbench edge counts as a full-height snap, in px. */
-const EDGE_BAND = 26;
+const SPLIT_BAND = 0.16;
+/**
+ * How close to the workbench edge counts as a full-height snap, in px.
+ *
+ * Deliberately tight. A wide band made a window feel like it snapped the
+ * moment it came anywhere near an edge, which left no room to simply set a
+ * window down near the side of the screen without it turning into a split.
+ * Narrow it and there is real margin to work in before docking takes over —
+ * a window only snaps once it is genuinely against the edge.
+ */
+const EDGE_BAND = 12;
 
 export function collectZones(root: HTMLElement): DropZones {
   const workbench = rectOf(root);
@@ -59,8 +67,13 @@ export function collectZones(root: HTMLElement): DropZones {
     });
   }
 
+  // From the layer, not from the tiles' parent: the left and right rails are
+  // siblings of `.workbench-centre`, so looking only at the tiles' own parent
+  // found the bottom rail and nothing else — dropping a tab on the navigator
+  // rail silently did nothing.
+  const layer = root.closest('.workbench-layer') ?? root.ownerDocument;
   const sidebars: SidebarZone[] = [];
-  for (const el of root.parentElement?.querySelectorAll<HTMLElement>('[data-window-sidebar]') ?? []) {
+  for (const el of layer.querySelectorAll<HTMLElement>('[data-window-sidebar]')) {
     const side = el.dataset.windowSidebar as SidebarSide | undefined;
     if (side) sidebars.push({ side, rect: rectOf(el) });
   }
@@ -89,9 +102,23 @@ export function resolveDrop(
      * tile must not swallow it.
      */
     edgesOnly?: boolean;
+    /**
+     * Snapping off entirely: the thing lands as a floating window wherever the
+     * pointer is, even over the middle of a tile.
+     *
+     * Held on ⌥ during the drag. Without it, floating a note *over the editor
+     * area* was impossible — every point inside the workbench resolves to some
+     * tile, so the only place a float could be dropped was the thin strip of
+     * header and status bar outside it, which is not a place anybody thinks to
+     * aim for. The float button in the tile corner still exists; this is the
+     * same intent expressed during a drag you have already started.
+     */
+    forceFloat?: boolean;
     floatSize?: { width: number; height: number };
   } = {},
 ): DropResolution | null {
+  if (options.forceFloat && options.allowFloat !== false) return floatAt(point, zones, options);
+
   for (const group of zones.groups) {
     if (group.tabStrip && contains(group.tabStrip, point)) {
       const index = insertionIndex(group.tabEdges ?? [], point.x);
@@ -129,7 +156,15 @@ export function resolveDrop(
   }
 
   if (options.allowFloat === false) return null;
+  return floatAt(point, zones, options);
+}
 
+/** A window-sized rectangle under the pointer, in both coordinate systems. */
+function floatAt(
+  point: { x: number; y: number },
+  zones: DropZones,
+  options: { floatSize?: { width: number; height: number } },
+): DropResolution {
   const size = options.floatSize ?? { width: 460, height: 380 };
   return {
     target: {
@@ -210,9 +245,33 @@ export function rectOf(el: HTMLElement): Rect {
 // Pointer gestures
 // ---------------------------------------------------------------------------
 
+/**
+ * Movement before a press counts as a drag rather than as a click.
+ *
+ * One number for the whole app: a tab, a rail tab and a navigator row are the
+ * same gesture from the hand's point of view, and a handle that picked its own
+ * value would be the one that feels twitchy.
+ */
+export const DRAG_THRESHOLD = 5;
+
 export interface PointerDragHandlers {
   onMove(event: PointerEvent, delta: { dx: number; dy: number }): void;
   onEnd?(event: PointerEvent, delta: { dx: number; dy: number }, cancelled: boolean): void;
+  /**
+   * Pixels of movement before this counts as a drag at all.
+   *
+   * Needed wherever the same press is also a click, which is everywhere a drag
+   * starts from a handle you also press: a navigator row opens a page *and*
+   * drags it somewhere, a tab switches to its view *and* moves it. Without one,
+   * the hand's own tremor during a click is a drag that lands a drop — see
+   * AGENTS → "A press that moves one pixel is still a click".
+   *
+   * Zero is only right for a handle whose press means nothing on its own, like
+   * a splitter or a resize corner.
+   */
+  threshold?: number;
+  /** Runs once the threshold is crossed, for chrome that only a real drag wants. */
+  onStart?(): void;
 }
 
 /**
@@ -226,9 +285,23 @@ export interface PointerDragHandlers {
 export function startPointerDrag(event: React.PointerEvent, handlers: PointerDragHandlers): void {
   const startX = event.clientX;
   const startY = event.clientY;
+  const threshold = handlers.threshold ?? 0;
+
+  let live = threshold === 0;
+  if (live) {
+    document.body.classList.add('is-dragging');
+    handlers.onStart?.();
+  }
 
   const move = (native: PointerEvent) => {
-    handlers.onMove(native, { dx: native.clientX - startX, dy: native.clientY - startY });
+    const delta = { dx: native.clientX - startX, dy: native.clientY - startY };
+    if (!live) {
+      if (Math.hypot(delta.dx, delta.dy) < threshold) return;
+      live = true;
+      document.body.classList.add('is-dragging');
+      handlers.onStart?.();
+    }
+    handlers.onMove(native, delta);
   };
 
   const finish = (native: PointerEvent, cancelled: boolean) => {
@@ -237,7 +310,16 @@ export function startPointerDrag(event: React.PointerEvent, handlers: PointerDra
     window.removeEventListener('pointercancel', cancel);
     window.removeEventListener('keydown', onKey, true);
     document.body.classList.remove('is-dragging');
-    handlers.onEnd?.(native, { dx: native.clientX - startX, dy: native.clientY - startY }, cancelled);
+    // A press that never crossed the threshold was a click, not a cancelled
+    // drag — telling the caller otherwise would have it undo something that
+    // never started.
+    if (live) {
+      handlers.onEnd?.(
+        native,
+        { dx: native.clientX - startX, dy: native.clientY - startY },
+        cancelled,
+      );
+    }
   };
 
   const up = (native: PointerEvent) => finish(native, false);
@@ -250,7 +332,6 @@ export function startPointerDrag(event: React.PointerEvent, handlers: PointerDra
     finish(new PointerEvent('pointercancel', { clientX: startX, clientY: startY }), true);
   };
 
-  document.body.classList.add('is-dragging');
   window.addEventListener('pointermove', move);
   window.addEventListener('pointerup', up);
   window.addEventListener('pointercancel', cancel);

@@ -4,6 +4,7 @@ import {
   endpointOf,
   type AiSettings,
 } from './ai-settings.js';
+import { fetchWithRetry, isRetryable, sleep, RETRY_DELAYS_MS } from './retry.js';
 
 /**
  * The AI proxy.
@@ -74,19 +75,35 @@ async function* streamAnthropic(
   system: string,
   signal?: AbortSignal,
 ): AsyncGenerator<string> {
-  const stream = anthropic(settings).messages.stream(
-    {
-      model: settings.model,
-      max_tokens: 64_000,
-      system,
-      messages: [{ role: 'user', content: prompt }],
-    },
-    { signal },
-  );
+  // Retried only up until the first real chunk: once something has reached
+  // the editor, restarting the request from scratch would mean whatever
+  // called this yields the same text twice. A failure after that point is
+  // rare (a mid-stream connection drop) and is left to surface as-is — see
+  // `RETRY_DELAYS_MS`'s doc comment for why this line is drawn the same way
+  // in the Spark agent loop.
+  for (let attempt = 0; ; attempt++) {
+    const stream = anthropic(settings).messages.stream(
+      {
+        model: settings.model,
+        max_tokens: 64_000,
+        system,
+        messages: [{ role: 'user', content: prompt }],
+      },
+      { signal },
+    );
 
-  for await (const event of stream) {
-    if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-      yield event.delta.text;
+    let sawContent = false;
+    try {
+      for await (const event of stream) {
+        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+          sawContent = true;
+          yield event.delta.text;
+        }
+      }
+      return;
+    } catch (err) {
+      if (sawContent || attempt >= RETRY_DELAYS_MS.length || !isRetryable(err) || signal?.aborted) throw err;
+      await sleep(RETRY_DELAYS_MS[attempt], signal);
     }
   }
 }
@@ -111,7 +128,7 @@ async function* streamOpenAi(
   // some of them reject the request outright.
   if (settings.apiKey) headers.authorization = `Bearer ${settings.apiKey}`;
 
-  const res = await fetch(url, {
+  const res = await fetchWithRetry(url, {
     method: 'POST',
     headers,
     body: JSON.stringify({

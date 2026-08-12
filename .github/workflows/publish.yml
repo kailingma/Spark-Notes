@@ -1,0 +1,81 @@
+# Builds a Docker image on every push and publishes it to GitHub Container
+# Registry (ghcr.io).
+#
+# The badge is enabled by default, so the workflow runs on every push to every
+# branch. Image tags: `latest` + the branch name for pushes (e.g. `main` from
+# the `main` branch), and `latest` + the tag for tags (e.g. `v0.9`).
+#
+# Become public (optional, so people can pull without logging in):
+#   https://github.com/<you>/<repo>/settings/packages → package settings →
+#   "Change visibility" → public.
+#
+# Build argument      Default    Purpose
+#   FETCH_FONTS       0          npm run fonts (~12 MB of OFL typefaces) into
+#                               the image. Set to 1 for the curated font
+#                               packs; without them the app uses system faces.
+#
+# Note: the repo's gitignored `space/` and `.spark/` never enter the image
+# (.dockerignore). A container needs its own notes volume and its own state.
+
+name: publish-to-ghcr
+
+on:
+  push:
+    branches: ['**']
+    tags: ['*']
+
+env:
+  # Publish to the container registry for GitHub itself, so nobody has to
+  # configure a registry secret.
+  REGISTRY: ghcr.io
+  # ghcr.io image names are lowercase.
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The GITHUB_TOKEN must be able to push the package into the registry.
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value={{branch}},enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,format=short
+
+      - name: Build and push
+        id: build-push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            FETCH_FONTS=0
+
+      - name: Report image digest
+        run: echo "Published ${{ steps.meta.outputs.tags }} → ${{ steps.build-push.outputs.digest }}"

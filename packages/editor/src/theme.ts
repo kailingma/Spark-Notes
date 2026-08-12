@@ -1,4 +1,5 @@
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { Prec } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { tags as t } from '@lezer/highlight';
 
@@ -286,6 +287,19 @@ export const sparkTheme = EditorView.theme({
     borderRadius: '2px',
     padding: '0.05em 0.15em',
   },
+  // A wikilink, a tag or a URL landing under a highlight or an active search
+  // match sets its own `color` (accent, or the tag colour), which overrides
+  // the body text these backgrounds were actually chosen against. Checked by
+  // computing WCAG contrast for every built-in theme: `--text` on
+  // `--highlight-bg` passes AA in all twelve, but `--accent`/`--tag` on the
+  // same background fails in most of them — as low as 2.5:1 — because
+  // nothing pairs those colours on purpose. Forcing the safe, already-verified
+  // body colour here is cheaper than re-picking every theme's accent to also
+  // work as a highlight foreground, and covers both nesting orders a mark
+  // decoration can produce.
+  '.cm-spark-highlight .cm-spark-wikilink, .cm-spark-wikilink .cm-spark-highlight,\n   .cm-spark-highlight .cm-spark-tag, .cm-spark-tag .cm-spark-highlight,\n   .cm-spark-highlight .cm-spark-link, .cm-spark-link .cm-spark-highlight,\n   .cm-searchMatch .cm-spark-wikilink, .cm-spark-wikilink .cm-searchMatch,\n   .cm-searchMatch .cm-spark-tag, .cm-spark-tag .cm-searchMatch,\n   .cm-searchMatch .cm-spark-link, .cm-spark-link .cm-searchMatch': {
+    color: 'var(--text)',
+  },
   '.cm-spark-task-done': {
     color: 'var(--text-faint)',
     textDecoration: 'line-through',
@@ -293,12 +307,36 @@ export const sparkTheme = EditorView.theme({
   },
 
   // --- Widgets -------------------------------------------------------------
+  // The tap target is bigger than the box: `::before` is absolutely positioned,
+  // so it extends the clickable area into the surrounding whitespace without
+  // taking any layout space of its own — the visible checkbox stays exactly
+  // 1.05em. `verticalAlign` moved here from `.cm-spark-checkbox` because this
+  // span, not the input, is now the inline-level box the line aligns.
+  '.cm-spark-checkbox-hit': {
+    position: 'relative',
+    display: 'inline-block',
+    verticalAlign: '-0.15em',
+    // The line's negative text-indent (the `--hang` outdent) is inherited, and
+    // text-indent applies to the inline-block's own first line — which dragged
+    // the checkbox left by the whole hang and sat every checkbox on the page
+    // at the far-left margin, indented or not. The widget's own advance is
+    // what positions the box; the line's indent must not reach inside it.
+    textIndent: '0',
+    cursor: 'pointer',
+  },
+  '.cm-spark-checkbox-hit::before': {
+    content: '""',
+    position: 'absolute',
+    top: '-0.4em',
+    bottom: '-0.4em',
+    left: '-0.3em',
+    right: '-0.3em',
+  },
   '.cm-spark-checkbox': {
     appearance: 'none',
     width: '1.05em',
     height: '1.05em',
     margin: '0 0.35em 0 0',
-    verticalAlign: '-0.15em',
     border: '1.5px solid var(--rule-strong)',
     borderRadius: '4px',
     cursor: 'pointer',
@@ -306,6 +344,14 @@ export const sparkTheme = EditorView.theme({
     transition: 'background-color 120ms ease, border-color 120ms ease',
   },
   '.cm-spark-checkbox:hover': { borderColor: 'var(--accent)' },
+  // A checkbox covered by the selection paints itself with the selection's own
+  // colour: the highlight is drawn *behind* the widget, so without this an
+  // opaque checked box would sit as a gap in the middle of a highlighted line.
+  // The checkmark stays, so a checked task still reads as checked mid-select.
+  '.cm-spark-checkbox-hit[data-selected] .cm-spark-checkbox': {
+    backgroundColor: 'var(--selection)',
+    borderColor: 'var(--selection)',
+  },
   '.cm-spark-checkbox:checked': {
     backgroundColor: 'var(--accent)',
     borderColor: 'var(--accent)',
@@ -320,6 +366,32 @@ export const sparkTheme = EditorView.theme({
     border: 'solid var(--accent-contrast)',
     borderWidth: '0 2px 2px 0',
     transform: 'rotate(45deg)',
+  },
+
+  // A plain bullet's `-`/`*`/`+`, replaced by `BulletWidget`. `width` here is
+  // `BULLET_EM` in `metrics.ts` — change one and the other goes stale.
+  '.cm-spark-bullet': {
+    display: 'inline-block',
+    width: '1.1em',
+    height: '1em',
+    // `top` put the dot at the top of the whole line box, which is taller
+    // than the text itself once line-height is 1.5+ — it read as sitting
+    // above the word next to it rather than beside it. `middle` is relative
+    // to the baseline instead, which is what actually centers it on the text.
+    verticalAlign: 'middle',
+    position: 'relative',
+    cursor: 'text',
+  },
+  '.cm-spark-bullet::before': {
+    content: '""',
+    position: 'absolute',
+    left: '0.36em',
+    top: '50%',
+    width: '0.32em',
+    height: '0.32em',
+    borderRadius: '50%',
+    backgroundColor: 'var(--text-faint)',
+    transform: 'translateY(-50%)',
   },
 
   '.cm-spark-rule': {
@@ -345,114 +417,9 @@ export const sparkTheme = EditorView.theme({
 
   // --- Find ----------------------------------------------------------------
   //
-  // CodeMirror's default panel is a full-width strip of bare form controls that
-  // shoves the document down. This floats it as a card in the top-right corner
-  // instead, so finding something doesn't reflow what you're reading.
-  '.cm-panels': {
-    backgroundColor: 'transparent',
-    border: 'none',
-    color: 'var(--text)',
-  },
-  '.cm-panels-top': {
-    position: 'absolute',
-    top: '0.6rem',
-    right: '0.9rem',
-    left: 'auto',
-    zIndex: '20',
-    borderBottom: 'none',
-  },
-  '.cm-panel.cm-search': {
-    display: 'flex',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    gap: '0.35rem',
-    padding: '0.5rem',
-    maxWidth: 'min(30rem, calc(100vw - 2rem))',
-    backgroundColor: 'var(--surface-raised)',
-    border: '1px solid var(--rule)',
-    borderRadius: 'var(--radius)',
-    boxShadow: 'var(--shadow-md)',
-    fontFamily: 'var(--font-ui)',
-    fontSize: '0.8125rem',
-  },
-  '.cm-panel.cm-search br': { display: 'none' },
-  '.cm-panel.cm-search label': {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: '0.25rem',
-    fontSize: '0.75rem',
-    color: 'var(--text-faint)',
-  },
-  '.cm-panel.cm-search input[type=text]': {
-    padding: '0.35rem 0.55rem',
-    minWidth: '11rem',
-    borderRadius: 'var(--radius-sm)',
-    border: '1px solid var(--rule)',
-    backgroundColor: 'var(--surface)',
-    color: 'var(--text)',
-    fontFamily: 'var(--font-ui)',
-    fontSize: '0.8125rem',
-    outline: 'none',
-  },
-  // The accent border is the focus indicator; the app's global focus ring on
-  // top of it reads as a doubled outline.
-  '.cm-panel.cm-search input[type=text]:focus': {
-    borderColor: 'var(--accent)',
-  },
-  '.cm-panel.cm-search input[type=text]:focus-visible': {
-    outline: 'none',
-  },
-  '.cm-panel.cm-search input[type=checkbox]': {
-    appearance: 'none',
-    width: '0.95em',
-    height: '0.95em',
-    margin: '0',
-    border: '1.5px solid var(--rule-strong)',
-    borderRadius: '3px',
-    position: 'relative',
-    cursor: 'pointer',
-  },
-  '.cm-panel.cm-search input[type=checkbox]:checked': {
-    backgroundColor: 'var(--accent)',
-    borderColor: 'var(--accent)',
-  },
-  '.cm-panel.cm-search input[type=checkbox]:checked::after': {
-    content: '""',
-    position: 'absolute',
-    left: '0.27em',
-    top: '0.06em',
-    width: '0.22em',
-    height: '0.45em',
-    border: 'solid var(--accent-contrast)',
-    borderWidth: '0 2px 2px 0',
-    transform: 'rotate(45deg)',
-  },
-  '.cm-panel.cm-search button:not([name=close])': {
-    padding: '0.3rem 0.6rem',
-    borderRadius: 'var(--radius-sm)',
-    border: '1px solid var(--rule)',
-    backgroundColor: 'var(--surface)',
-    backgroundImage: 'none',
-    color: 'var(--text-muted)',
-    fontFamily: 'var(--font-ui)',
-    fontSize: '0.75rem',
-    cursor: 'pointer',
-  },
-  '.cm-panel.cm-search button:not([name=close]):hover': {
-    borderColor: 'var(--rule-strong)',
-    color: 'var(--text)',
-  },
-  '.cm-panel.cm-search [name=close]': {
-    position: 'static',
-    marginLeft: 'auto',
-    padding: '0 0.3rem',
-    color: 'var(--text-faint)',
-    background: 'none',
-    border: 'none',
-    fontSize: '1.1rem',
-    cursor: 'pointer',
-  },
-  '.cm-panel.cm-search [name=close]:hover': { color: 'var(--text)' },
+  // Only the matches. The bar itself is drawn by the shell over the *view*, not
+  // by CodeMirror inside the document — see `SparkEditor.setFind` and
+  // `FindBar` — so there is no `.cm-panel` here to style.
   '.cm-searchMatch': {
     backgroundColor: 'var(--search-match)',
     borderRadius: '2px',
@@ -492,6 +459,28 @@ export const sparkTheme = EditorView.theme({
   },
 });
 
+/**
+ * The selection `drawSelection` draws, at the specificity it actually wins at.
+ *
+ * The base theme's focused selection rule — `&light.cm-focused > .cm-scroller
+ * > .cm-selectionLayer .cm-selectionBackground` — is five classes deep, so a
+ * plain `.cm-selectionBackground` override loses on specificity, and the
+ * focused selection painted a fixed light colour even in dark mode, where the
+ * text it sat under is also light. The editor is classed light by default
+ * because this theme follows CSS variables rather than declaring a scheme, so
+ * whichever base variant matches, restating the rule at its own specificity —
+ * with the editor's own scope class standing in for the scheme class — makes
+ * the token win. `Prec.highest` puts it after the base theme in the stylesheet,
+ * which is what breaks the tie at equal specificity.
+ */
+export const sparkSelection = Prec.highest(
+  EditorView.theme({
+    '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
+      backgroundColor: 'var(--selection)',
+    },
+  }),
+);
+
 /** Token colours. Kept deliberately quiet — structure reads through weight. */
 export const sparkHighlightStyle = HighlightStyle.define([
   { tag: t.heading, fontWeight: '700' },
@@ -503,7 +492,13 @@ export const sparkHighlightStyle = HighlightStyle.define([
   { tag: t.monospace, fontFamily: 'var(--font-mono)', color: 'var(--code-text)' },
   { tag: t.processingInstruction, color: 'var(--text-faintest)' },
   { tag: t.contentSeparator, color: 'var(--text-faintest)' },
-  { tag: t.list, color: 'var(--text-faint)' },
+  //
+  // There is deliberately no rule for `t.list`. The grammar tags a list as
+  // `"BulletList/..."` — every descendant, not the marker — and `Task` carries
+  // the same tag on the whole line, so colouring it greys the *text* of every
+  // bullet and every task on the page. A page of tasks then reads as a page of
+  // disabled controls. The markers are already quiet: `ListMark` is a
+  // processing instruction, one line up.
   { tag: t.quote, color: 'var(--text-muted)' },
   { tag: t.tagName, color: 'var(--tag)' },
 

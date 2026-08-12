@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 
 /**
@@ -60,6 +60,21 @@ const MIME: Record<string, string> = {
   '.html': 'text/html',
   '.css': 'text/css',
   '.log': 'text/plain',
+  // Named not because anything can read them, but so the refusal can say what
+  // the file *is* — "a Word document" is actionable, "octet-stream" is not.
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.zip': 'application/zip',
+  '.heic': 'image/heic',
+};
+
+/** Types worth naming in a refusal, with what to do instead. */
+const ADVICE: Record<string, string> = {
+  '.docx': 'a Word document. Exporting it as markdown, or pasting the part that matters, both work',
+  '.xlsx': 'a spreadsheet. Saving the sheet as CSV makes it readable, and computable',
+  '.pptx': 'a slide deck. Exporting it as PDF makes it readable',
+  '.heic': 'an Apple photo format that no model accepts. Converting it to JPEG or PNG works',
 };
 
 /** Extensions whose bytes are just text. Anything here can be read directly. */
@@ -87,7 +102,13 @@ export class FileStore {
    * The name is sanitised rather than replaced by an id: `files/invoice-3.pdf`
    * is a link someone might read in a diff or type in a note, and
    * `files/a3f9c1.pdf` is not. Collisions get a numeric suffix instead of
-   * overwriting, because two files called `screenshot.png` are two files.
+   * overwriting, because two files called `screenshot.png` are two files —
+   * and on macOS, "screenshot.png" (or "Screenshot 2026-08-11 at
+   * 3.00.00 PM.png") is exactly the name two uploads in the same batch are
+   * likely to share. With uploads now sent in parallel, that pair really can
+   * race: `wx` makes the create itself atomic, so the loser of the race gets
+   * `EEXIST` and just tries the next suffix, instead of the two silently
+   * overwriting each other the way a check-then-write would.
    */
   async save(filename: string, bytes: Uint8Array): Promise<StoredFile> {
     if (bytes.byteLength > MAX_UPLOAD) {
@@ -95,15 +116,43 @@ export class FileStore {
     }
 
     await mkdir(this.#dir, { recursive: true });
-    const safe = await this.#uniqueName(sanitize(filename));
-    await writeFile(join(this.#dir, safe), bytes);
+    const base = sanitize(filename);
+    const ext = extname(base);
+    const stem = base.slice(0, base.length - ext.length) || 'file';
 
+    for (let n = 0; n < 200; n++) {
+      const candidate = n === 0 ? `${stem}${ext}` : `${stem}-${n}${ext}`;
+      try {
+        await writeFile(join(this.#dir, candidate), bytes, { flag: 'wx' });
+        return {
+          name: `${FILES_DIR}/${candidate}`,
+          size: bytes.byteLength,
+          modified: Date.now(),
+          mime: mimeOf(candidate),
+        };
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      }
+    }
+    // 200 same-named collisions in one folder is pathological, not a real
+    // batch — a timestamp breaks the tie without another 200 attempts.
+    const candidate = `${stem}-${Date.now()}${ext}`;
+    await writeFile(join(this.#dir, candidate), bytes, { flag: 'wx' });
     return {
-      name: `${FILES_DIR}/${safe}`,
+      name: `${FILES_DIR}/${candidate}`,
       size: bytes.byteLength,
       modified: Date.now(),
-      mime: mimeOf(safe),
+      mime: mimeOf(candidate),
     };
+  }
+
+  /** Removes an upload. Guarded by the same traversal-proof path resolution `bytes`/`payload` use. */
+  async remove(name: string): Promise<void> {
+    try {
+      await rm(this.#pathFor(name));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
   }
 
   async list(): Promise<StoredFile[]> {
@@ -196,7 +245,9 @@ export class FileStore {
 
     return {
       kind: 'unsupported',
-      reason: `"${name}" is a ${mime} file, which cannot be read as text or looked at. It is stored and can be linked to.`,
+      reason: ADVICE[ext]
+        ? `"${name}" is ${ADVICE[ext]}. The file is stored either way and can be linked to.`
+        : `"${name}" is a ${mime} file, which cannot be read as text or looked at. It is stored and can be linked to.`,
     };
   }
 
@@ -206,21 +257,6 @@ export class FileStore {
     const base = sanitize(name.replace(/^files\//i, ''));
     if (!base) throw new Error('that is not a file name');
     return join(this.#dir, base);
-  }
-
-  async #uniqueName(base: string): Promise<string> {
-    const ext = extname(base);
-    const stem = base.slice(0, base.length - ext.length) || 'file';
-
-    for (let n = 0; n < 200; n++) {
-      const candidate = n === 0 ? `${stem}${ext}` : `${stem}-${n}${ext}`;
-      try {
-        await stat(join(this.#dir, candidate));
-      } catch {
-        return candidate;
-      }
-    }
-    return `${stem}-${Date.now()}${ext}`;
   }
 }
 

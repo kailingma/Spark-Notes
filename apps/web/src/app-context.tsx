@@ -37,6 +37,24 @@ import { useRoute, type Route } from './lib/router';
 const LIST_REFRESH_DELAY = 1500;
 
 /**
+ * How often the page list is re-read while the tab is in front of you.
+ *
+ * The space is a folder of markdown that anything can write to — vim, a git
+ * pull, Spark's own tools, a file dropped into it in Finder — so the app's own
+ * `page:save` events are only *some* of the ways a page appears. Nothing here
+ * was watching for the rest, and a note created outside the app stayed invisible
+ * in the navigator until something unrelated happened to trigger a refresh.
+ *
+ * A poll rather than a watcher because a watcher would be a websocket, a server
+ * that holds `fs.watch` handles over a whole tree, and a reconnection story —
+ * for a list that costs one cheap request. Twelve seconds is under the time it
+ * takes to switch to another app, do the thing and come back, which is the case
+ * this exists for; the visibility check is what keeps a background tab from
+ * polling a laptop's disk all afternoon.
+ */
+const LIST_POLL_INTERVAL = 12_000;
+
+/**
  * The one React-facing seam over the framework-agnostic `Workspace`.
  *
  * Everything stateful the shell needs — route, page list, tasks, sync status,
@@ -428,6 +446,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
       offDelete();
     };
   }, [workspace, refreshPages, refreshFolders]);
+
+  /**
+   * The list also refreshes on its own, so nothing created outside the app is
+   * ever missed.
+   *
+   * Three triggers, and they are three different situations rather than three
+   * tries at one: coming back to the tab (you were somewhere else doing the
+   * thing), the window regaining focus (you were in another window on the same
+   * screen — `visibilitychange` does not fire for that), and the slow poll (you
+   * never left, and something else wrote to the folder).
+   */
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState !== 'visible') return;
+      void refreshPages();
+      void refreshFolders();
+    };
+
+    const timer = window.setInterval(refresh, LIST_POLL_INTERVAL);
+    const onVisible = () => refresh();
+
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
+  }, [refreshPages, refreshFolders]);
 
   // The OAuth popup posts back when GitHub returns; pick the new user up.
   useEffect(() => {

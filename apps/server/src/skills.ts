@@ -36,6 +36,13 @@ export interface SkillMeta {
   description: string;
   /** When to reach for it. Optional, but it is what makes the choice good. */
   when?: string;
+  /**
+   * Set when a line in the frontmatter block couldn't be read — most often
+   * a `description` or `when` that wraps onto a second line, which this
+   * parser has no continuation syntax for. The skill still loads with
+   * whatever it *could* read; this just says some of it didn't arrive.
+   */
+  warning?: string;
 }
 
 export interface Skill extends SkillMeta {
@@ -84,11 +91,17 @@ export class SkillStore {
         .map(async (entry): Promise<SkillMeta | null> => {
           try {
             const raw = await readFile(join(this.#dir, entry.name, 'SKILL.md'), 'utf8');
-            const { front } = splitFrontmatter(raw);
+            const { front, dropped } = splitFrontmatter(raw);
+            if (dropped.length > 0) {
+              console.warn(`[skills] "${entry.name}" has unreadable frontmatter: ${dropped.join(' / ')}`);
+            }
             return {
               name: entry.name,
               description: front.description ?? '(no description)',
               when: front.when,
+              ...(dropped.length > 0
+                ? { warning: `Part of this skill's frontmatter didn't parse: ${dropped.join(' / ')}` }
+                : {}),
             };
           } catch {
             // A folder without a readable SKILL.md is not a skill. Skipping it
@@ -112,7 +125,10 @@ export class SkillStore {
       throw new Error(`There is no skill called "${name}". Use list_skills to see what there is.`);
     }
 
-    const { front, body } = splitFrontmatter(raw);
+    const { front, body, dropped } = splitFrontmatter(raw);
+    if (dropped.length > 0) {
+      console.warn(`[skills] "${name}" has unreadable frontmatter: ${dropped.join(' / ')}`);
+    }
     let files: string[] = [];
     try {
       const entries = await readdir(dir, { withFileTypes: true });
@@ -128,6 +144,9 @@ export class SkillStore {
       name,
       description: front.description ?? '(no description)',
       when: front.when,
+      ...(dropped.length > 0
+        ? { warning: `Part of this skill's frontmatter didn't parse: ${dropped.join(' / ')}` }
+        : {}),
       body: body.slice(0, MAX_BODY),
       files,
     };
@@ -213,21 +232,37 @@ export const skills = new SkillStore(config.spaceDir);
 
 // ---------------------------------------------------------------------------
 
-/** Splits `---\nkey: value\n---\nbody`. Absent frontmatter is not an error. */
-function splitFrontmatter(raw: string): { front: Record<string, string>; body: string } {
+/**
+ * Splits `---\nkey: value\n---\nbody`. Absent frontmatter is not an error.
+ *
+ * Deliberately not a YAML parser — see the module doc comment — which means
+ * a value that wraps onto a second line has no continuation syntax: the
+ * second line has no colon, so it silently failed to become part of
+ * `description` or `when` and just vanished. `dropped` is what turns that
+ * from silent into merely quiet: the lines that didn't parse, so a caller
+ * can at least say something happened instead of a skill author wondering
+ * why half their `when` line never made it into the prompt.
+ */
+function splitFrontmatter(
+  raw: string,
+): { front: Record<string, string>; body: string; dropped: string[] } {
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(raw);
-  if (!match) return { front: {}, body: raw.trim() };
+  if (!match) return { front: {}, body: raw.trim(), dropped: [] };
 
   const front: Record<string, string> = {};
+  const dropped: string[] = [];
   for (const line of match[1].split('\n')) {
     const colon = line.indexOf(':');
-    if (colon < 1) continue;
+    if (colon < 1) {
+      if (line.trim()) dropped.push(line.trim());
+      continue;
+    }
     const key = line.slice(0, colon).trim().toLowerCase();
     const value = line.slice(colon + 1).trim().replace(/^["']|["']$/g, '');
     if (key && value) front[key] = value;
   }
 
-  return { front, body: raw.slice(match[0].length).trim() };
+  return { front, body: raw.slice(match[0].length).trim(), dropped };
 }
 
 function oneLine(text: string): string {

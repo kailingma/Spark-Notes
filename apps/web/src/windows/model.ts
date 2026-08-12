@@ -64,6 +64,17 @@ export interface GroupNode {
   views: ViewRef[];
   /** Index into `views`. Clamped by `normalize`. */
   active: number;
+  /**
+   * The one tab, if any, standing in for whatever you last glanced at rather
+   * than committed to reading — VS Code calls this a preview tab. Opened in
+   * italic, and the next thing you glance at replaces it instead of piling up
+   * beside it, the way a `cd` doesn't grow your shell history until you type
+   * something. Reading it for a while, or touching it at all — a keystroke, a
+   * moved caret — turns it into an ordinary tab, because at that point you
+   * were not glancing. `null` when the group has no such tab, and cleared by
+   * `normalize` if the view it named ever stops being one of `views`.
+   */
+  preview: string | null;
 }
 
 /** A row or column of tiles, with fractional sizes summing to 1. */
@@ -144,7 +155,7 @@ export function newId(prefix: string): string {
 }
 
 export function newGroup(views: ViewRef[] = []): GroupNode {
-  return { kind: 'group', id: newId('g'), views, active: Math.max(0, views.length - 1) };
+  return { kind: 'group', id: newId('g'), views, active: Math.max(0, views.length - 1), preview: null };
 }
 
 export function newView(type: string, params: Record<string, string> = {}, title?: string): ViewRef {
@@ -321,7 +332,11 @@ function replaceNode(root: LayoutNode, id: string, replacement: LayoutNode): Lay
 export function normalize(node: LayoutNode): LayoutNode {
   if (node.kind === 'group') {
     const active = Math.min(Math.max(node.active, 0), Math.max(node.views.length - 1, 0));
-    return active === node.active ? node : { ...node, active };
+    const preview =
+      node.preview !== null && node.views.some((view) => view.id === node.preview)
+        ? node.preview
+        : null;
+    return active === node.active && preview === node.preview ? node : { ...node, active, preview };
   }
 
   const kept: LayoutNode[] = [];
@@ -369,13 +384,71 @@ function splitAround(target: LayoutNode, addition: LayoutNode, side: Side): Spli
 }
 
 /** Re-anchors focus on a group that still exists. */
-function settleFocus(layout: Layout, preferred?: string): Layout {
+export function settleFocus(layout: Layout, preferred?: string): Layout {
   const groups = groupsOf(layout.root);
   if (preferred && groups.some((group) => group.id === preferred)) {
     return { ...layout, focus: preferred };
   }
   if (groups.some((group) => group.id === layout.focus)) return layout;
   return { ...layout, focus: groups[0]?.id ?? layout.focus };
+}
+
+// ---------------------------------------------------------------------------
+// Persistence
+// ---------------------------------------------------------------------------
+
+function isLayoutNode(value: unknown): value is LayoutNode {
+  if (!value || typeof value !== 'object') return false;
+  const kind = (value as { kind?: unknown }).kind;
+  if (kind === 'group') return Array.isArray((value as GroupNode).views);
+  if (kind === 'split') return Array.isArray((value as SplitNode).children);
+  return false;
+}
+
+function isSidebar(value: unknown): value is Sidebar {
+  return (
+    Boolean(value) &&
+    typeof value === 'object' &&
+    typeof (value as Sidebar).open === 'boolean' &&
+    typeof (value as Sidebar).size === 'number' &&
+    Array.isArray((value as Sidebar).views)
+  );
+}
+
+/**
+ * Restores a layout from a persisted plain-JSON value, defensively — the
+ * value came out of `localStorage` (by way of `SettingsApi`), so it may be
+ * from an older version of the app, hand-edited, or simply absent, and none
+ * of those may ever be able to crash the workbench on load. Falls back to
+ * `fallback` (an ordinary freshly-built layout) wherever the stored value
+ * doesn't look like a `Layout` at all, field by field rather than by
+ * spreading — the same reasoning `loadPreferences` already uses.
+ *
+ * Restoring bypasses every operation in this file that would ordinarily
+ * keep the tree's invariants true, so `normalize()` and `settleFocus` run
+ * here exactly as if the stored tree had just come out of one of them.
+ */
+export function restorePersistedLayout(raw: unknown, fallback: Layout): Layout {
+  if (!raw || typeof raw !== 'object') return fallback;
+  const value = raw as Partial<Layout>;
+  if (!isLayoutNode(value.root)) return fallback;
+
+  const root = normalize(value.root);
+  const sidebars = { ...fallback.sidebars };
+  if (value.sidebars && typeof value.sidebars === 'object') {
+    for (const side of Object.keys(sidebars) as SidebarSide[]) {
+      const stored = (value.sidebars as Record<string, unknown>)[side];
+      if (isSidebar(stored)) sidebars[side] = stored;
+    }
+  }
+  const windows = Array.isArray(value.windows) ? value.windows : fallback.windows;
+  const nextZ = typeof value.nextZ === 'number' ? value.nextZ : fallback.nextZ;
+  const focusedView = typeof value.focusedView === 'string' ? value.focusedView : null;
+
+  return settleFocus(
+    { root, focus: fallback.focus, focusedView, windows, sidebars, nextZ },
+    typeof value.focus === 'string' ? value.focus : undefined,
+  );
 }
 
 function withRoot(layout: Layout, root: LayoutNode, preferredFocus?: string): Layout {
@@ -394,6 +467,53 @@ export function openInGroup(layout: Layout, groupId: string, view: ViewRef): Lay
       : node,
   );
   return { ...withRoot(layout, root, groupId), focusedView: view.id };
+}
+
+/**
+ * Adds a view as the group's *preview* tab — replacing whatever the previous
+ * preview was, rather than adding beside it, the way a second glance at
+ * another file in VS Code's explorer replaces the first instead of opening a
+ * second tab. A group can hold at most one.
+ *
+ * Only for the ordinary "I clicked a page" gesture (`place()`'s plain `tab`
+ * case). Nothing else routes through here: a drag, a duplicate, a split are
+ * all a person committing to a specific arrangement, and turning any of those
+ * into a preview would replace a tab they just deliberately made.
+ */
+export function openTabPreview(layout: Layout, groupId: string, view: ViewRef): Layout {
+  const target = findGroup(layout.root, groupId);
+  if (!target) return openInGroup(layout, layout.focus, view);
+
+  const previewIndex = target.preview ? target.views.findIndex((entry) => entry.id === target.preview) : -1;
+
+  const root = mapTree(layout.root, (node) => {
+    if (node.kind !== 'group' || node.id !== groupId) return node;
+    if (previewIndex >= 0) {
+      const views = node.views.map((entry, index) => (index === previewIndex ? view : entry));
+      return { ...node, views, active: previewIndex, preview: view.id };
+    }
+    return { ...node, views: [...node.views, view], active: node.views.length, preview: view.id };
+  });
+  return { ...withRoot(layout, root, groupId), focusedView: view.id };
+}
+
+/**
+ * A preview tab becomes an ordinary one — the moment you read on past a
+ * glance, or touch the page at all.
+ *
+ * Checked before mapping so that promoting a view which isn't anybody's
+ * preview (the overwhelmingly common case: this fires on every keystroke and
+ * caret move) returns the identical layout rather than a new object nothing
+ * actually changed, which would cost a re-render for nothing.
+ */
+export function promoteView(layout: Layout, instanceId: string): Layout {
+  if (!groupsOf(layout.root).some((group) => group.preview === instanceId)) return layout;
+  return {
+    ...layout,
+    root: mapTree(layout.root, (node) =>
+      node.kind === 'group' && node.preview === instanceId ? { ...node, preview: null } : node,
+    ),
+  };
 }
 
 /**
@@ -452,15 +572,26 @@ export function openWindow(
   };
 }
 
+/**
+ * Adds a view to a rail and makes it the active one.
+ *
+ * It does *not* deduplicate by type. It used to, and that was a second and
+ * cruder copy of the singleton rule `openView` already applies — one that could
+ * not tell two different pages apart, so dropping a second note into a rail
+ * silently revealed the first. Whether a view may exist twice is a property of
+ * the view, decided in one place; a drop that reaches here has already been
+ * allowed to happen and must land.
+ */
 export function openInSidebar(layout: Layout, side: SidebarSide, view: ViewRef): Layout {
   const sidebar = layout.sidebars[side];
-  const existing = sidebar.views.findIndex((entry) => entry.type === view.type);
-  const views = existing >= 0 ? sidebar.views : [...sidebar.views, view];
-  const active = existing >= 0 ? existing : views.length - 1;
+  const views = [...sidebar.views, view];
   return {
     ...layout,
-    sidebars: { ...layout.sidebars, [side]: { ...sidebar, open: true, views, active } },
-    focusedView: views[active].id,
+    sidebars: {
+      ...layout.sidebars,
+      [side]: { ...sidebar, open: true, views, active: views.length - 1 },
+    },
+    focusedView: view.id,
   };
 }
 
@@ -593,6 +724,43 @@ export function setWindowState(layout: Layout, windowId: string, state: WindowSt
 // ---------------------------------------------------------------------------
 
 /**
+ * Puts a view where a drop target says, wherever it came from.
+ *
+ * Split out of `moveView` because a drop is not always a move: dragging a page
+ * out of the navigator lands a view that did not exist a moment ago, and it has
+ * to obey exactly the same targets — the alternative is a second, subtly
+ * different set of placement rules that only the navigator uses.
+ */
+export function openAt(layout: Layout, view: ViewRef, target: DropTarget): Layout {
+  switch (target.kind) {
+    case 'tab': {
+      // The group may have gone with the last tab that left it.
+      const group = findGroup(layout.root, target.groupId);
+      if (!group) return openInGroup(layout, layout.focus, view);
+      const root = mapTree(layout.root, (node) => {
+        if (node.kind !== 'group' || node.id !== target.groupId) return node;
+        const index = Math.max(0, Math.min(target.index ?? node.views.length, node.views.length));
+        const views = [...node.views.slice(0, index), view, ...node.views.slice(index)];
+        return { ...node, views, active: index };
+      });
+      return { ...withRoot(layout, root, target.groupId), focusedView: view.id };
+    }
+    case 'split': {
+      if (!findGroup(layout.root, target.groupId)) {
+        return openAtEdge(layout, view, target.side);
+      }
+      return openBeside(layout, target.groupId, view, target.side);
+    }
+    case 'edge':
+      return openAtEdge(layout, view, target.side);
+    case 'sidebar':
+      return openInSidebar(layout, target.side, view);
+    case 'window':
+      return openWindow(layout, view, target.rect);
+  }
+}
+
+/**
  * Detaches a view from wherever it is and re-attaches it at `target`.
  *
  * Detach-then-attach in one step, rather than close plus open, because closing
@@ -614,34 +782,27 @@ export function moveView(layout: Layout, instanceId: string, target: DropTarget)
     return revealView(layout, instanceId);
   }
 
-  const detached = closeView(layout, instanceId);
-
-  switch (target.kind) {
-    case 'tab': {
-      // The group may have gone with the last tab that left it.
-      const group = findGroup(detached.root, target.groupId);
-      if (!group) return openInGroup(detached, detached.focus, view);
-      const root = mapTree(detached.root, (node) => {
-        if (node.kind !== 'group' || node.id !== target.groupId) return node;
-        const index = Math.max(0, Math.min(target.index ?? node.views.length, node.views.length));
-        const views = [...node.views.slice(0, index), view, ...node.views.slice(index)];
-        return { ...node, views, active: index };
-      });
-      return { ...withRoot(detached, root, target.groupId), focusedView: view.id };
-    }
-    case 'split': {
-      if (!findGroup(detached.root, target.groupId)) {
-        return openAtEdge(detached, view, target.side);
-      }
-      return openBeside(detached, target.groupId, view, target.side);
-    }
-    case 'edge':
-      return openAtEdge(detached, view, target.side);
-    case 'sidebar':
-      return openInSidebar(detached, target.side, view);
-    case 'window':
-      return openWindow(detached, view, target.rect);
+  // The other no-op: a rail tab released over its own rail. A rail has no
+  // insertion points — `collectZones` measures tab edges for a tile's strip and
+  // nothing for a sidebar — so there is no position such a drop could be asking
+  // for, and re-attaching would append the panel to the end and make it active.
+  // That is how a click on Places sent it to the back of the left rail.
+  if (target.kind === 'sidebar' && found.surface === 'sidebar' && found.side === target.side) {
+    return revealView(layout, instanceId);
   }
+
+  // Dropping a tab back into its own strip: the insertion index was measured
+  // against the strip as it stands, but the view is removed before it is
+  // re-inserted, so every position after its own is one too far to the right.
+  let landing = target;
+  if (target.kind === 'tab' && found.surface === 'tab' && found.group.id === target.groupId) {
+    const from = found.group.views.findIndex((entry) => entry.id === instanceId);
+    if (target.index !== undefined && from >= 0 && target.index > from) {
+      landing = { ...target, index: target.index - 1 };
+    }
+  }
+
+  return openAt(closeView(layout, instanceId), view, landing);
 }
 
 // ---------------------------------------------------------------------------
@@ -682,7 +843,11 @@ export function setSidebarSize(layout: Layout, side: SidebarSide, size: number):
     ...layout,
     sidebars: {
       ...layout.sidebars,
-      [side]: { ...layout.sidebars[side], size: Math.max(160, Math.min(720, size)) },
+      // The real ceiling — leaving room for the tile area — is a fraction of
+      // the viewport, enforced where the drag reads `window.innerWidth` in
+      // `Workbench.tsx`. This is only the sanity bound for a value that did
+      // not come from that drag (a restored layout, a plugin).
+      [side]: { ...layout.sidebars[side], size: Math.max(160, Math.min(1600, size)) },
     },
   };
 }
@@ -791,6 +956,9 @@ function reviveNode(raw: unknown, keepType: (type: string) => boolean): LayoutNo
       id: typeof node.id === 'string' ? node.id : newId('g'),
       views,
       active: clampIndex(node.active, views.length),
+      // Never revived: a preview tab is a fact about a session's attention,
+      // not something worth restoring days later — see `restoreLayout`.
+      preview: null,
     };
   }
 

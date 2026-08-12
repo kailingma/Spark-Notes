@@ -1,0 +1,35 @@
+# Kept out of the build context: they are regenerated or are secrets.
+# `npm ci` in the image installs from package-lock.json, so the already-built
+# `node_modules` here (which belongs to this machine's architecture) would only
+# slow the copy and risk leaking a wrong-platform install into the context.
+node_modules/
+
+# Build output — rebuilt in the image.
+apps/web/dist/
+
+# Git and editor noise.
+.git/
+.gitignore
+*.tsbuildinfo
+.DS_Store
+
+# Secrets and local state. Never ship the machine's own AI key or GitHub token
+# into an image.
+.env
+.env.*
+.spark/
+
+# The local dev space. In the container the space is *your* notes, mounted as a
+# volume — this repo's dev copy does not belong in the image.
+space/
+
+# Fonts are fetched inside the build (FETCH_FONTS=1) rather than copied, so the
+# 12 MB of WOFF2s on this machine never enters the build context.
+apps/web/public/fonts/
+
+# Agent working notes.
+AGENTS.md
+CLAUDE.md
+
+# Keep the build context self-explanatory: the image is built only from
+# package manifests, the lockfile, and the checked-in source.

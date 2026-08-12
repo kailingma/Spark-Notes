@@ -1,4 +1,9 @@
-export { SparkEditor, type SparkEditorOptions } from './editor.js';
+export {
+  SparkEditor,
+  type FindQuery,
+  type FindStatus,
+  type SparkEditorOptions,
+} from './editor.js';
 export { livePreview, livePreviewConfig, type LivePreviewConfig } from './live-preview.js';
 export { sparkMarkdownExtensions, WikiLink, Highlight, Hashtag } from './markdown-extensions.js';
 export { sparkHighlightStyle, sparkHighlighting, sparkTheme } from './theme.js';

@@ -110,6 +110,18 @@ export class SyncController {
     return this.#git;
   }
 
+  /** Pulls an existing repository into an empty space. */
+  async cloneRepo(remote: string): Promise<GitStatus> {
+    const res = await fetch(`${this.baseUrl}/clone`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ remote }),
+    });
+    if (!res.ok) throw new Error((await res.text()) || `Could not clone (${res.status}).`);
+    this.#git = (await res.json()) as GitStatus;
+    return this.#git;
+  }
+
   get status(): SyncStatus {
     return this.#status;
   }

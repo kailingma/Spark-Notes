@@ -9,8 +9,16 @@ import {
   type ViewUpdate,
 } from '@codemirror/view';
 import type { InlineDecorator } from '@spark/plugin-sdk';
-import { checkboxHang, headingHang, metricsChanged, textHang } from './metrics.js';
-import { CheckboxWidget, CodeFenceWidget, ImageWidget, PluginWidget, RuleWidget } from './widgets.js';
+import { pageSettings, type PageSettings } from './frontmatter.js';
+import { bulletHang, checkboxHang, headingHang, metricsChanged, textHang } from './metrics.js';
+import {
+  BulletWidget,
+  CheckboxWidget,
+  CodeFenceWidget,
+  ImageWidget,
+  PluginWidget,
+  RuleWidget,
+} from './widgets.js';
 
 /**
  * Live preview: markdown that styles itself and gets out of the way.
@@ -21,6 +29,10 @@ import { CheckboxWidget, CodeFenceWidget, ImageWidget, PluginWidget, RuleWidget 
  * hiding is driven by the real parse tree rather than regexes over text, a `*`
  * inside a code fence is left alone, and the document itself is never rewritten
  * — what you save is exactly the markdown you typed.
+ *
+ * "The selection" means a *live* caret. An editor with no focus has no caret,
+ * so nothing reveals: clicking away from a note leaves it reading as a page
+ * rather than frozen with the markdown of whichever line you left the cursor on.
  */
 
 export interface LivePreviewConfig {
@@ -34,6 +46,14 @@ export interface LivePreviewConfig {
   decorators?: () => InlineDecorator[];
   /** Name of the page being edited, passed through to plugin decorators. */
   page?: () => string | null;
+  /**
+   * Turns a path written in the document into one the browser can fetch.
+   *
+   * `![](files/scan.png)` and `banner: files/hero.jpg` are relative to the
+   * *space*, not to the URL the app happens to be at, so resolving them is the
+   * shell's business — the editor has no idea where the space is served from.
+   */
+  resolveAsset?: (src: string) => string;
 }
 
 export const livePreviewConfig = Facet.define<LivePreviewConfig, LivePreviewConfig>({
@@ -54,6 +74,8 @@ const CODE_LINE = lineClass('cm-spark-code');
 const CODE_OPEN_LINE = lineClass('cm-spark-code-open');
 const CODE_CLOSE_LINE = lineClass('cm-spark-code-close');
 const FRONTMATTER_LINE = lineClass('cm-spark-frontmatter');
+const FRONTMATTER_OPEN_LINE = lineClass('cm-spark-frontmatter-open');
+const FRONTMATTER_CLOSE_LINE = lineClass('cm-spark-frontmatter-close');
 const TABLE_LINE = lineClass('cm-spark-table');
 
 const INLINE_CODE_MARK = markClass('cm-spark-inline-code');
@@ -62,6 +84,8 @@ const WIKILINK_MARK = markClass('cm-spark-wikilink');
 const TAG_MARK = markClass('cm-spark-tag');
 const HIGHLIGHT_MARK = markClass('cm-spark-highlight');
 const DONE_TASK_MARK = markClass('cm-spark-task-done');
+const FRONTMATTER_KEY_MARK = markClass('cm-spark-fm-key');
+const FRONTMATTER_VALUE_MARK = markClass('cm-spark-fm-value');
 
 /** Marker node names whose visibility follows their parent element. */
 const ELEMENT_MARKS = new Set([
@@ -74,25 +98,23 @@ const ELEMENT_MARKS = new Set([
 ]);
 
 // ---------------------------------------------------------------------------
-// Selection tests
+// The build
 // ---------------------------------------------------------------------------
 
-/** True when any selection range overlaps `[from, to]`, endpoints included. */
-function touches(state: EditorState, from: number, to: number): boolean {
-  return state.selection.ranges.some((range) => range.from <= to && range.to >= from);
-}
-
-/** True when the selection is anywhere on the line containing `pos`. */
-function onLine(state: EditorState, pos: number): boolean {
-  const line = state.doc.lineAt(pos);
-  return touches(state, line.from, line.to);
-}
-
-// ---------------------------------------------------------------------------
-// Builder
-// ---------------------------------------------------------------------------
-
-interface Collected {
+/**
+ * One pass over one document.
+ *
+ * `reveal` travels with the state rather than being read from the view at each
+ * test, because "is this editor focused" has to be answered identically for
+ * every decoration in a pass — a build that revealed some markers and not
+ * others would render a line that has never existed.
+ */
+interface Build {
+  view: EditorView;
+  state: EditorState;
+  reveal: boolean;
+  /** Page-level frontmatter settings, read from the whole document. */
+  settings: PageSettings;
   decorations: Range<Decoration>[];
   /** Ranges already replaced by the tree pass, so plugins can't overlap them. */
   replaced: Array<[number, number]>;
@@ -101,18 +123,24 @@ interface Collected {
 function buildDecorations(view: EditorView): DecorationSet {
   const { state } = view;
   const config = state.facet(livePreviewConfig);
-  const out: Collected = { decorations: [], replaced: [] };
+  const build: Build = {
+    view,
+    state,
+    reveal: view.hasFocus,
+    settings: pageSettings(state.doc),
+    decorations: [],
+    replaced: [],
+  };
 
   for (const { from, to } of view.visibleRanges) {
-    decorateFrontmatter(state, from, to, out);
-    decorateHangingIndent(view, from, to, out);
-    decorateTree(view, from, to, out);
-    decoratePlugins(view, from, to, config, out);
+    decorateHangingIndent(build, from, to);
+    decorateTree(build, from, to);
+    decoratePlugins(build, from, to, config);
   }
 
   // `sort: true` lets us emit decorations in tree order and still satisfy
   // CodeMirror's requirement that the set be position-ordered.
-  return Decoration.set(out.decorations, true);
+  return Decoration.set(build.decorations, true);
 }
 
 /**
@@ -132,54 +160,36 @@ function atomicOf(decorations: DecorationSet): DecorationSet {
   return Decoration.set(ranges, true);
 }
 
-function hide(out: Collected, from: number, to: number): void {
+// ---------------------------------------------------------------------------
+// Selection tests
+// ---------------------------------------------------------------------------
+
+/** True when a live selection range overlaps `[from, to]`, endpoints included. */
+function touches(b: Build, from: number, to: number): boolean {
+  if (!b.reveal) return false;
+  return b.state.selection.ranges.some((range) => range.from <= to && range.to >= from);
+}
+
+/** True when the selection is anywhere on the line containing `pos`. */
+function onLine(b: Build, pos: number): boolean {
+  const line = b.state.doc.lineAt(pos);
+  return touches(b, line.from, line.to);
+}
+
+function hide(b: Build, from: number, to: number): void {
   if (to <= from) return;
-  out.decorations.push(hidden.range(from, to));
-  out.replaced.push([from, to]);
+  b.decorations.push(hidden.range(from, to));
+  b.replaced.push([from, to]);
 }
 
-function replaceWith(
-  out: Collected,
-  from: number,
-  to: number,
-  decoration: Decoration,
-): void {
+function replaceWith(b: Build, from: number, to: number, decoration: Decoration): void {
   if (to < from) return;
-  out.decorations.push(decoration.range(from, to));
-  out.replaced.push([from, to]);
+  b.decorations.push(decoration.range(from, to));
+  b.replaced.push([from, to]);
 }
 
-/**
- * Frontmatter isn't part of the markdown grammar, so it's matched directly.
- * It stays readable but visually recedes — it's metadata, not prose.
- */
-function decorateFrontmatter(
-  state: EditorState,
-  from: number,
-  to: number,
-  out: Collected,
-): void {
-  if (!state.doc.sliceString(0, 4).startsWith('---\n')) return;
-
-  let end = -1;
-  for (let n = 2; n <= state.doc.lines; n++) {
-    if (state.doc.line(n).text.trimEnd() === '---') {
-      end = state.doc.line(n).to;
-      break;
-    }
-  }
-  if (end < 0) return;
-
-  for (let n = 1; n <= state.doc.lines; n++) {
-    const line = state.doc.line(n);
-    if (line.from > end) break;
-    if (line.to < from || line.from > to) continue;
-    out.decorations.push(FRONTMATTER_LINE.range(line.from));
-  }
-}
-
-/** `  - [ ] text` → indent, marker, spacing, optional checkbox. */
-const LIST_LINE_RE = /^(\s*)([-*+]|\d+[.)])(\s+)(\[[ xX]\]\s*)?/;
+/** `  - [ ] text` → indent, marker, spacing, optional checkbox and its spacing. */
+const LIST_LINE_RE = /^(\s*)([-*+]|\d+[.)])(\s+)(\[[ xX]\](\s*))?/;
 
 /**
  * A line that is only hashes — `#`, `##` — with nothing after them, not even a
@@ -201,34 +211,38 @@ const PENDING_TAG_RE = /^\s*#{1,6}$/;
  * hangs by the width of its checkbox while the marker is hidden and by the
  * width of `- [ ] ` once the cursor reveals it.
  */
-function decorateHangingIndent(
-  view: EditorView,
-  from: number,
-  to: number,
-  out: Collected,
-): void {
-  const { state } = view;
-  const first = state.doc.lineAt(from).number;
-  const last = state.doc.lineAt(to).number;
+function decorateHangingIndent(b: Build, from: number, to: number): void {
+  const first = b.state.doc.lineAt(from).number;
+  const last = b.state.doc.lineAt(to).number;
 
   for (let n = first; n <= last; n++) {
-    const line = state.doc.line(n);
+    const line = b.state.doc.line(n);
     const match = LIST_LINE_RE.exec(line.text);
     if (!match) continue;
 
-    const [prefix, indent, , , task] = match;
-    const showsCheckbox = task !== undefined && !taskMarkerRevealed(state, line.from, match);
+    const [prefix, indent, marker, gap, task, taskSpacing] = match;
+    const showsCheckbox = task !== undefined && !taskMarkerRevealed(b, line.from, match);
+    // A bullet's `-`/`*`/`+` is a dot when it isn't a task and isn't an ordered
+    // number — see the `ListMark` branch below, which is the thing this has to
+    // agree with about what is actually on screen.
+    const showsBullet =
+      task === undefined && !/\d/.test(marker) && !bulletMarkerRevealed(b, line.from, match);
 
-    out.decorations.push(
+    b.decorations.push(
       Decoration.line({
         class: 'cm-spark-hang',
         attributes: {
           style: `--hang:${
             showsCheckbox
-              ? // The `- ` is hidden and the `[ ]` is a widget, so all that is
-                // left in front of the text is the indent and the checkbox.
-                checkboxHang(view, indent)
-              : textHang(view, prefix)
+              ? // The `- ` is hidden and the `[ ]` is a widget, so what stands in
+                // front of the text is the indent, the checkbox, and the space
+                // after the marker — which is still ordinary document text and
+                // still takes its own width. Leaving it out is why every wrapped
+                // task row sat one space to the left of the row above it.
+                checkboxHang(b.view, indent + (taskSpacing ?? ''))
+              : showsBullet
+                ? bulletHang(b.view, indent, gap)
+                : textHang(b.view, prefix)
           }`,
         },
       }).range(line.from),
@@ -237,35 +251,70 @@ function decorateHangingIndent(
 }
 
 /**
+ * True when the selection is on a plain list marker itself, which puts the raw
+ * character back so it can be edited or deleted. Mirrors `taskMarkerRevealed`.
+ */
+function bulletMarkerRevealed(b: Build, lineFrom: number, match: RegExpExecArray): boolean {
+  const [, indent, marker] = match;
+  const markerFrom = lineFrom + indent.length;
+  return touches(b, markerFrom, markerFrom + marker.length);
+}
+
+/**
  * True when the selection is on the `[ ]` of a task, which puts the raw marker
  * back so it can be edited. Anywhere else on the line keeps the checkbox: the
  * marker is a control, and swapping it for text while you write the task would
  * make the line jump under the cursor.
  */
-function taskMarkerRevealed(
-  state: EditorState,
-  lineFrom: number,
-  match: RegExpExecArray,
-): boolean {
+function taskMarkerRevealed(b: Build, lineFrom: number, match: RegExpExecArray): boolean {
   const [, indent, marker, spacing, task] = match;
   if (task === undefined) return false;
   const markerFrom = lineFrom + indent.length + marker.length + spacing.length;
-  return touches(state, markerFrom, markerFrom + 3);
+  return touches(b, markerFrom, markerFrom + 3);
 }
 
-function decorateTree(
-  view: EditorView,
-  rangeFrom: number,
-  rangeTo: number,
-  out: Collected,
-): void {
-  const { state } = view;
+function decorateTree(b: Build, rangeFrom: number, rangeTo: number): void {
+  const { state } = b;
 
   syntaxTree(state).iterate({
     from: rangeFrom,
     to: rangeTo,
     enter: (node) => {
       const name = node.name;
+
+      // --- Frontmatter ----------------------------------------------------
+      if (name === 'Frontmatter') {
+        decorateFrontmatter(b, node.node, rangeFrom, rangeTo);
+        return;
+      }
+
+      if (name === 'FrontmatterMark') {
+        // The fences carry no information once the block is obviously a block,
+        // so they collapse to the panel's own top and bottom padding — and come
+        // back the moment the cursor is inside, which is the only time you would
+        // want to unmake them.
+        const parent = node.node.parent;
+        if (parent && touches(b, parent.from, parent.to)) return;
+        hide(b, node.from, node.to);
+        return;
+      }
+
+      if (name === 'FrontmatterKey') {
+        b.decorations.push(FRONTMATTER_KEY_MARK.range(node.from, node.to));
+        return;
+      }
+
+      if (name === 'FrontmatterValue') {
+        b.decorations.push(FRONTMATTER_VALUE_MARK.range(node.from, node.to));
+        return;
+      }
+
+      // A tag declared in the frontmatter is the same thing as a `#tag` in the
+      // prose, so it is painted as one and follows the same click.
+      if (name === 'FrontmatterTag') {
+        b.decorations.push(TAG_MARK.range(node.from, node.to));
+        return;
+      }
 
       // --- Headings -------------------------------------------------------
       const atx = /^ATXHeading(\d)$/.exec(name);
@@ -285,21 +334,33 @@ function decorateTree(
         // `false` skips the children, which matters: the `HeaderMark` branch
         // would otherwise hide the only character on the line.
         if (PENDING_TAG_RE.test(line.text)) {
-          if (level === 1) out.decorations.push(TAG_MARK.range(node.from, node.to));
+          if (level === 1) b.decorations.push(TAG_MARK.range(node.from, node.to));
           return false;
         }
 
         // While the `#`s are showing they hang out into the left margin, so the
         // heading text stays on the same edge as body text. Without this, the
         // title jumps sideways the moment you put the cursor in it.
-        const revealed = onLine(state, node.from);
+        const revealed = onLine(b, node.from);
 
-        out.decorations.push(
+        b.decorations.push(
           Decoration.line({
             class: `cm-spark-h${level}${revealed ? ' cm-spark-head-hang' : ''}`,
             ...(revealed ? { attributes: { style: `--hang:${headingHang(level)}` } } : {}),
           }).range(line.from),
         );
+
+        // The page's banner sits behind its title, with room above it. Every H1
+        // gets one rather than the first: a heading is where a page turns, and
+        // an image that appears once is a header, which is a different thing.
+        if (level === 1 && b.settings.banner) {
+          b.decorations.push(
+            Decoration.line({
+              class: 'cm-spark-banner',
+              attributes: { style: `--banner:url("${cssUrl(b, b.settings.banner)}")` },
+            }).range(line.from),
+          );
+        }
         return;
       }
 
@@ -308,29 +369,29 @@ function decorateTree(
         // Setext underlines stay put: hiding them would collapse the line to
         // nothing and make the heading impossible to unmake.
         if (!parent.startsWith('ATXHeading')) return;
-        if (onLine(state, node.from)) return;
+        if (onLine(b, node.from)) return;
         // Swallow the space after `##` too, so the text starts at the margin.
         const after = state.doc.sliceString(node.to, node.to + 1);
-        hide(out, node.from, after === ' ' ? node.to + 1 : node.to);
+        hide(b, node.from, after === ' ' ? node.to + 1 : node.to);
         return;
       }
 
       // --- Inline emphasis ------------------------------------------------
       if (ELEMENT_MARKS.has(name)) {
         const parent = node.node.parent;
-        if (parent && !touches(state, parent.from, parent.to)) {
-          hide(out, node.from, node.to);
+        if (parent && !touches(b, parent.from, parent.to)) {
+          hide(b, node.from, node.to);
         }
         return;
       }
 
       if (name === 'Highlight') {
-        out.decorations.push(HIGHLIGHT_MARK.range(node.from, node.to));
+        b.decorations.push(HIGHLIGHT_MARK.range(node.from, node.to));
         return;
       }
 
       if (name === 'Hashtag') {
-        out.decorations.push(TAG_MARK.range(node.from, node.to));
+        b.decorations.push(TAG_MARK.range(node.from, node.to));
         return;
       }
 
@@ -340,7 +401,7 @@ function decorateTree(
       // outline, so a `flag` in the middle of a sentence reads as a thing you
       // would type rather than as a differently-coloured word.
       if (name === 'InlineCode') {
-        out.decorations.push(INLINE_CODE_MARK.range(node.from, node.to));
+        b.decorations.push(INLINE_CODE_MARK.range(node.from, node.to));
         return;
       }
 
@@ -351,13 +412,30 @@ function decorateTree(
         // copy button. Touching them here as well would produce two overlapping
         // replacements, which CodeMirror refuses outright.
         if (parent?.name !== 'InlineCode') return;
-        if (touches(state, parent.from, parent.to)) return;
-        hide(out, node.from, node.to);
+        if (touches(b, parent.from, parent.to)) return;
+        hide(b, node.from, node.to);
         return;
       }
 
       if (name === 'FencedCode' || name === 'CodeBlock') {
-        decorateCodeBlock(state, node.node, name === 'FencedCode', rangeFrom, rangeTo, out);
+        decorateCodeBlock(b, node.node, name === 'FencedCode', rangeFrom, rangeTo);
+        return;
+      }
+
+      // --- Bulleted lists ---------------------------------------------------
+      //
+      // A plain `-`/`*`/`+` reads as a small hyphen sitting on the baseline.
+      // Whichever character was typed becomes the same centered dot — none of
+      // the three means anything different, so the mark shouldn't either.
+      if (name === 'ListMark') {
+        const item = node.node.parent;
+        const list = item?.parent;
+        if (!item || list?.name !== 'BulletList') return;
+        // A task's marker is handled below, as part of the checkbox — hiding it
+        // again here would try to replace the same characters twice.
+        if (item.getChild('Task')) return;
+        if (touches(b, node.from, node.to)) return;
+        replaceWith(b, node.from, node.to, Decoration.replace({ widget: new BulletWidget() }));
         return;
       }
 
@@ -370,7 +448,7 @@ function decorateTree(
           n <= state.doc.lineAt(stop).number;
           n++
         ) {
-          out.decorations.push(QUOTE_LINE.range(state.doc.line(n).from));
+          b.decorations.push(QUOTE_LINE.range(state.doc.line(n).from));
         }
         return;
       }
@@ -382,8 +460,8 @@ function decorateTree(
         // the cursor on the marker itself and it comes back.
         const after = state.doc.sliceString(node.to, node.to + 1);
         const end = after === ' ' ? node.to + 1 : node.to;
-        if (touches(state, node.from, end)) return;
-        hide(out, node.from, end);
+        if (touches(b, node.from, end)) return;
+        hide(b, node.from, end);
         return;
       }
 
@@ -396,9 +474,9 @@ function decorateTree(
         // back — the same bargain every other piece of syntax makes. It is
         // scoped to the marker rather than the whole line so that writing the
         // task text doesn't swap the checkbox out from under the cursor.
-        if (touches(state, node.from, node.to)) {
+        if (touches(b, node.from, node.to)) {
           if (checked && node.to < line.to) {
-            out.decorations.push(DONE_TASK_MARK.range(node.to, line.to));
+            b.decorations.push(DONE_TASK_MARK.range(node.to, line.to));
           }
           return;
         }
@@ -409,77 +487,107 @@ function decorateTree(
           state.doc.sliceString(line.from, node.from),
         );
         if (bullet) {
-          hide(out, line.from + bullet[1].length, node.from);
+          hide(b, line.from + bullet[1].length, node.from);
         }
 
         replaceWith(
-          out,
+          b,
           node.from,
           node.to,
           Decoration.replace({
-            widget: new CheckboxWidget(checked, node.from, node.to),
+            widget: new CheckboxWidget(
+              checked,
+              node.from,
+              node.to,
+              // Whether the selection covers the marker — without the `reveal`
+              // gate, because this is about the highlight, which is drawn
+              // whether or not the editor is focused.
+              b.state.selection.ranges.some(
+                (range) => range.from < node.to && range.to > node.from,
+              ),
+            ),
           }),
         );
         // Strike through the rest of the line so done work reads as done.
         if (checked && node.to < line.to) {
-          out.decorations.push(DONE_TASK_MARK.range(node.to, line.to));
+          b.decorations.push(DONE_TASK_MARK.range(node.to, line.to));
         }
         return;
       }
 
       // --- Rules ----------------------------------------------------------
       if (name === 'HorizontalRule') {
-        if (onLine(state, node.from)) return;
-        replaceWith(
-          out,
-          node.from,
-          node.to,
-          Decoration.replace({ widget: new RuleWidget() }),
-        );
+        if (onLine(b, node.from)) return;
+        replaceWith(b, node.from, node.to, Decoration.replace({ widget: new RuleWidget() }));
         return false;
       }
 
       // --- Images ---------------------------------------------------------
       if (name === 'Image') {
-        if (touches(state, node.from, node.to)) return;
+        if (touches(b, node.from, node.to)) return;
         const source = state.doc.sliceString(node.from, node.to);
         const match = /^!\[([^\]]*)\]\(\s*<?([^)\s>]*)>?/.exec(source);
         if (!match?.[2]) return;
+        // Sizing lives in the alt text, Obsidian-style: `![alt|300](src)` or
+        // `![alt|300x200](src)`. It has to be *inside* the brackets — a
+        // `=300` suffix after the URL breaks the parser's link destination,
+        // which stops at the first space, so the Image node never covers it
+        // and nothing would render.
+        const alt = match[1];
+        const size = /^(.+?)\|(\d+)(?:x(\d+))?$/.exec(alt);
         replaceWith(
-          out,
+          b,
           node.from,
           node.to,
-          Decoration.replace({ widget: new ImageWidget(match[2], match[1]) }),
+          Decoration.replace({
+            widget: new ImageWidget(
+              assetUrl(b, match[2]),
+              size ? size[1] : alt,
+              size ? Number(size[2]) : undefined,
+              size && size[3] ? Number(size[3]) : undefined,
+            ),
+          }),
         );
         return false;
       }
 
       // --- Links ----------------------------------------------------------
       if (name === 'Link') {
-        out.decorations.push(LINK_MARK.range(node.from, node.to));
+        b.decorations.push(LINK_MARK.range(node.from, node.to));
         return;
       }
 
       if (name === 'LinkMark' || name === 'URL' || name === 'LinkTitle') {
         const parent = node.node.parent;
         if (!parent || (parent.name !== 'Link' && parent.name !== 'Image')) return;
-        if (touches(state, parent.from, parent.to)) return;
-        hide(out, node.from, node.to);
+        if (touches(b, parent.from, parent.to)) return;
+        hide(b, node.from, node.to);
         return;
       }
 
       if (name === 'WikiLink') {
-        out.decorations.push(WIKILINK_MARK.range(node.from, node.to));
+        b.decorations.push(WIKILINK_MARK.range(node.from, node.to));
         return;
       }
 
       if (name === 'WikiLinkTarget') {
+        const parent = node.node.parent;
+        if (!parent || touches(b, parent.from, parent.to)) return;
+
         // With an alias present, the target itself is plumbing — hide it and
         // show only the words the author chose.
-        const parent = node.node.parent;
-        if (!parent || touches(state, parent.from, parent.to)) return;
-        const hasAlias = parent.node.getChild('WikiLinkAlias');
-        if (hasAlias) hide(out, node.from, node.to);
+        if (parent.node.getChild('WikiLinkAlias')) {
+          hide(b, node.from, node.to);
+          return;
+        }
+
+        // Without one, the folders are plumbing too. `[[projects/pcb-mic]]`
+        // reads as *pcb-mic*: a link is a reference to a page, and a page is
+        // what it is called, not where it is filed. The path is still there in
+        // the text, one caret press away, and it is what gets followed.
+        const path = state.doc.sliceString(node.from, node.to);
+        const slash = path.lastIndexOf('/');
+        if (slash >= 0) hide(b, node.from, node.from + slash + 1);
         return;
       }
 
@@ -492,7 +600,7 @@ function decorateTree(
           n <= state.doc.lineAt(stop).number;
           n++
         ) {
-          out.decorations.push(TABLE_LINE.range(state.doc.line(n).from));
+          b.decorations.push(TABLE_LINE.range(state.doc.line(n).from));
         }
         return;
       }
@@ -500,6 +608,36 @@ function decorateTree(
       return;
     },
   });
+}
+
+/**
+ * The frontmatter block, as a quiet panel above the document.
+ *
+ * It is metadata rather than prose, so it recedes: monospaced, small, on the
+ * code tint, with the keys and the values told apart by colour. The block is a
+ * real parse node (see `markdown-extensions.ts`) purely so that this can be
+ * true — matched as text, its two `---` lines are a thematic break and a setext
+ * heading, and no amount of decoration makes those read as metadata.
+ */
+function decorateFrontmatter(
+  b: Build,
+  node: SyntaxNode,
+  rangeFrom: number,
+  rangeTo: number,
+): void {
+  const { state } = b;
+  const firstLine = state.doc.lineAt(node.from);
+  const lastLine = state.doc.lineAt(node.to);
+
+  const start = state.doc.lineAt(Math.max(node.from, rangeFrom)).number;
+  const stop = state.doc.lineAt(Math.min(node.to, rangeTo)).number;
+
+  for (let n = start; n <= stop; n++) {
+    const line = state.doc.line(n);
+    b.decorations.push(FRONTMATTER_LINE.range(line.from));
+    if (n === firstLine.number) b.decorations.push(FRONTMATTER_OPEN_LINE.range(line.from));
+    if (n === lastLine.number) b.decorations.push(FRONTMATTER_CLOSE_LINE.range(line.from));
+  }
 }
 
 /** A closing fence and nothing else — an unterminated block has no such line. */
@@ -516,13 +654,13 @@ const CLOSING_FENCE_RE = /^\s*(```|~~~)\s*$/;
  * time you would want to change the language or unmake the fence.
  */
 function decorateCodeBlock(
-  state: EditorState,
+  b: Build,
   node: SyntaxNode,
   fenced: boolean,
   rangeFrom: number,
   rangeTo: number,
-  out: Collected,
 ): void {
+  const { state } = b;
   const firstLine = state.doc.lineAt(node.from);
   const lastLine = state.doc.lineAt(node.to);
 
@@ -530,9 +668,9 @@ function decorateCodeBlock(
   const stop = state.doc.lineAt(Math.min(node.to, rangeTo)).number;
   for (let n = start; n <= stop; n++) {
     const line = state.doc.line(n);
-    out.decorations.push(CODE_LINE.range(line.from));
-    if (n === firstLine.number) out.decorations.push(CODE_OPEN_LINE.range(line.from));
-    if (n === lastLine.number) out.decorations.push(CODE_CLOSE_LINE.range(line.from));
+    b.decorations.push(CODE_LINE.range(line.from));
+    if (n === firstLine.number) b.decorations.push(CODE_OPEN_LINE.range(line.from));
+    if (n === lastLine.number) b.decorations.push(CODE_CLOSE_LINE.range(line.from));
   }
 
   // An indented code block has no fences to hide.
@@ -552,17 +690,17 @@ function decorateCodeBlock(
   // decorations tolerate that, but emitting the same *replacement* twice is an
   // overlap, which CodeMirror rejects — so each fence is claimed by the single
   // visible range that contains it. Ranges are disjoint, so exactly one does.
-  if (within(firstLine.from, rangeFrom, rangeTo) && !onLine(state, firstLine.from)) {
+  if (within(firstLine.from, rangeFrom, rangeTo) && !onLine(b, firstLine.from)) {
     replaceWith(
-      out,
+      b,
       firstLine.from,
       firstLine.to,
       Decoration.replace({ widget: new CodeFenceWidget(language, body) }),
     );
   }
 
-  if (closed && within(lastLine.from, rangeFrom, rangeTo) && !onLine(state, lastLine.from)) {
-    hide(out, lastLine.from, lastLine.to);
+  if (closed && within(lastLine.from, rangeFrom, rangeTo) && !onLine(b, lastLine.from)) {
+    hide(b, lastLine.from, lastLine.to);
   }
 }
 
@@ -572,16 +710,15 @@ function within(pos: number, from: number, to: number): boolean {
 
 /** Runs plugin-registered inline decorators over the visible lines. */
 function decoratePlugins(
-  view: EditorView,
+  b: Build,
   rangeFrom: number,
   rangeTo: number,
   config: LivePreviewConfig,
-  out: Collected,
 ): void {
   const decorators = config.decorators?.() ?? [];
   if (decorators.length === 0) return;
 
-  const { state } = view;
+  const { state, view } = b;
   const firstLine = state.doc.lineAt(rangeFrom).number;
   const lastLine = state.doc.lineAt(rangeTo).number;
 
@@ -606,12 +743,12 @@ function decoratePlugins(
         const from = line.from + match.index;
         const to = from + match[0].length;
 
-        if (decorator.revealOnCursor !== false && touches(state, from, to)) continue;
-        if (out.replaced.some(([a, b]) => from < b && to > a)) continue;
+        if (decorator.revealOnCursor !== false && touches(b, from, to)) continue;
+        if (b.replaced.some(([a, z]) => from < z && to > a)) continue;
 
         const captured = match;
         replaceWith(
-          out,
+          b,
           from,
           to,
           Decoration.replace({
@@ -634,6 +771,21 @@ function decoratePlugins(
       }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Asset paths
+// ---------------------------------------------------------------------------
+
+/** A path from the document, as something the browser can fetch. */
+function assetUrl(b: Build, src: string): string {
+  const config = b.state.facet(livePreviewConfig);
+  return config.resolveAsset?.(src) ?? src;
+}
+
+/** The same, safe to drop inside `url("…")`. */
+function cssUrl(b: Build, src: string): string {
+  return assetUrl(b, src).replace(/["\\]/g, '\\$&');
 }
 
 // ---------------------------------------------------------------------------
@@ -661,7 +813,14 @@ export const livePreview = ViewPlugin.fromClass(
         update.focusChanged ||
         // A font finished loading or the reading face changed, so every
         // margin outdent was computed against widths that no longer hold.
-        update.transactions.some((tr) => tr.effects.some((effect) => effect.is(metricsChanged)))
+        update.transactions.some((tr) => tr.effects.some((effect) => effect.is(metricsChanged))) ||
+        // The parser caught up. CodeMirror parses what is on screen within a
+        // time budget and finishes the rest in idle callbacks, handing out a
+        // *partial* tree until then — so on a long page the first build runs
+        // against a tree that stops part way down, and everything below it
+        // renders as raw markdown until something else happens to trigger a
+        // rebuild. Nothing else necessarily does. This is that trigger.
+        syntaxTree(update.startState) !== syntaxTree(update.state)
       ) {
         this.decorations = buildDecorations(update.view);
         this.atomic = atomicOf(this.decorations);
@@ -710,10 +869,16 @@ export const livePreview = ViewPlugin.fromClass(
             return true;
           }
 
-          if (node.name === 'Hashtag') {
+          if (node.name === 'Hashtag' || node.name === 'FrontmatterTag') {
             if (!config.onTag) return false;
             event.preventDefault();
-            config.onTag(text.sliceString(node.from, node.to).replace(/^#/, '').trim());
+            config.onTag(
+              text
+                .sliceString(node.from, node.to)
+                .replace(/^#/, '')
+                .replace(/^["']|["']$/g, '')
+                .trim(),
+            );
             return true;
           }
 

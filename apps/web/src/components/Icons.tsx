@@ -1,14 +1,41 @@
 import {
+  Archive,
+  ArrowUp,
+  Bold,
   Brain,
+  Check,
+  ChevronDown,
+  ChevronLeft,
   ChevronRight,
+  CircleHelp,
+  ClipboardPaste,
+  Clock,
   Code,
+  Code2,
+  Eye,
+  EyeOff,
+  Globe,
+  Heading2,
+  Highlighter,
+  IndentIncrease,
+  Italic,
+  Lightbulb,
+  Link2,
+  MoreHorizontal,
+  Quote,
+  RotateCcw,
+  SquareCode,
+  Undo2,
   Columns2,
   Columns3,
+  Compass,
+  Copy,
   FileText,
   Folder,
   FolderPlus,
   GraduationCap,
   GripVertical,
+  Hand,
   History,
   Info,
   Keyboard,
@@ -29,13 +56,17 @@ import {
   Paperclip,
   PenLine,
   PictureInPicture2,
+  Pin,
+  PinOff,
   Plus,
   Puzzle,
   RefreshCw,
+  Rocket,
+  Scissors,
   Search,
-  Send,
   Settings,
   ShieldCheck,
+  Slash,
   SlidersHorizontal,
   Sparkles,
   Square,
@@ -47,10 +78,12 @@ import {
   TextQuote,
   Trash2,
   Type,
+  Upload,
   X,
   Zap,
   type LucideProps,
 } from 'lucide-react';
+import { SparkLogo } from './SparkLogo';
 
 /**
  * Icons.
@@ -81,6 +114,10 @@ export const SidebarCloseIcon = (props: IconProps) => <PanelRightClose {...props
 export const SearchIcon = (props: IconProps) => <Search {...props} />;
 export const PlusIcon = (props: IconProps) => <Plus {...props} />;
 export const TaskIcon = (props: IconProps) => <SquareCheck {...props} />;
+/* Capture's own modes, beyond Note and Task above. */
+export const IdeaIcon = (props: IconProps) => <Lightbulb {...props} />;
+export const QuestionIcon = (props: IconProps) => <CircleHelp {...props} />;
+export const LogIcon = (props: IconProps) => <Clock {...props} />;
 export const TagIcon = (props: IconProps) => <Tag {...props} />;
 export const MicIcon = (props: IconProps) => <Mic {...props} />;
 export const CloseIcon = (props: IconProps) => <X {...props} />;
@@ -98,7 +135,20 @@ export const MoonIcon = (props: IconProps) => <Moon {...props} />;
  */
 export const SystemThemeIcon = (props: IconProps) => <SunMoon {...props} />;
 
-export const SparkIcon = (props: IconProps) => <Sparkles {...props} />;
+/**
+ * Spark.
+ *
+ * The one icon in the set that is *not* lucide — it is drawn, in `SparkLogo.tsx`,
+ * and the reasoning is there. Aliased here anyway so every call site still
+ * imports its icons from one place, and so the props are the lucide ones: a
+ * `size` and a `className` are all anything passes it.
+ */
+export const SparkIcon = ({ size, className }: IconProps) => (
+  <SparkLogo size={typeof size === 'number' ? size : 16} className={className} />
+);
+
+/** The generic "a model did this" glyph, for anything that is not Spark itself. */
+export const AiIcon = (props: IconProps) => <Sparkles {...props} />;
 
 /**
  * Quick capture. A bolt rather than a pen: the box is about getting a thought
@@ -153,6 +203,8 @@ export const PanelIcon = (props: IconProps) => <PanelRight {...props} />;
  */
 
 export const NavigatorIcon = (props: IconProps) => <PanelLeft {...props} />;
+/** Places: the short list of somewhere to go, rather than everything there is. */
+export const PlacesIcon = (props: IconProps) => <Compass {...props} />;
 export const TreeIcon = (props: IconProps) => <ListTree {...props} />;
 export const ListIcon = (props: IconProps) => <List {...props} />;
 export const ColumnsIcon = (props: IconProps) => <Columns3 {...props} />;
@@ -169,6 +221,51 @@ export const ChevronIcon = (props: IconProps) => <ChevronRight {...props} />;
  */
 export const PageIcon = (props: IconProps) => <FileText {...props} />;
 
+/*
+ * Acting on what is in the navigator.
+ *
+ * The clipboard verbs keep their universal glyphs — a rename or a delete can be
+ * a word in a menu, but scissors and a clipboard are read faster than either.
+ * Upload is an arrow *into* something, not a paperclip: attaching a file to a
+ * message (`AttachIcon`) and putting one in the space are different acts and
+ * one of them is not reversible by deleting a draft.
+ */
+/*
+ * The chat's own controls.
+ *
+ * A chevron for anything that opens a list under it, an ellipsis for the
+ * overflow — the two shapes people already read as "there is more here" without
+ * being told. `RotateCcw` for regenerate rather than a refresh circle, because
+ * refresh already means sync in the status bar and the two would collide.
+ * `Undo2` for rewind is the same glyph the editor's undo would use, which is the
+ * point: rewinding a conversation is undoing your last message.
+ */
+export const ChevronDownIcon = (props: IconProps) => <ChevronDown {...props} />;
+/** Scrolling the tab strip when it overflows. */
+export const ChevronLeftIcon = (props: IconProps) => <ChevronLeft {...props} />;
+export const ChevronRightIcon = (props: IconProps) => <ChevronRight {...props} />;
+export const MoreIcon = (props: IconProps) => <MoreHorizontal {...props} />;
+export const RegenerateIcon = (props: IconProps) => <RotateCcw {...props} />;
+export const RewindIcon = (props: IconProps) => <Undo2 {...props} />;
+export const CheckIcon = (props: IconProps) => <Check {...props} />;
+export const WebIcon = (props: IconProps) => <Globe {...props} />;
+/** Showing and hiding what the model thought. */
+export const ShowIcon = (props: IconProps) => <Eye {...props} />;
+export const HideIcon = (props: IconProps) => <EyeOff {...props} />;
+/** The permission mode dial: a shield, because it is about what may happen. */
+export const PermissionIcon = (props: IconProps) => <ShieldCheck {...props} />;
+/** Manual: every call stops and asks — a hand held up. */
+export const HandIcon = (props: IconProps) => <Hand {...props} />;
+/** Auto: nothing asks, all the way to the end. */
+export const RocketIcon = (props: IconProps) => <Rocket {...props} />;
+
+export const CutIcon = (props: IconProps) => <Scissors {...props} />;
+export const CopyIcon = (props: IconProps) => <Copy {...props} />;
+export const PasteIcon = (props: IconProps) => <ClipboardPaste {...props} />;
+export const PinIcon = (props: IconProps) => <Pin {...props} />;
+export const PinOffIcon = (props: IconProps) => <PinOff {...props} />;
+export const UploadIcon = (props: IconProps) => <Upload {...props} />;
+
 /* Settings sections. Each is the thing it configures, not a generic gear. */
 
 export const GeneralIcon = (props: IconProps) => <SlidersHorizontal {...props} />;
@@ -179,9 +276,35 @@ export const KeyboardIcon = (props: IconProps) => <Keyboard {...props} />;
 export const PluginIcon = (props: IconProps) => <Puzzle {...props} />;
 export const InfoIcon = (props: IconProps) => <Info {...props} />;
 export const ShieldIcon = (props: IconProps) => <ShieldCheck {...props} />;
-export const SendIcon = (props: IconProps) => <Send {...props} />;
+/**
+ * Send.
+ *
+ * An arrow up, not a paper plane. The composer sits at the bottom of the panel
+ * and the message travels up into the transcript directly above it, so the arrow
+ * describes where the thing goes — and the plane, which every messaging app uses,
+ * says "transmit to someone else", which is not what this does.
+ */
+export const SendIcon = (props: IconProps) => <ArrowUp {...props} />;
+/** Slash commands, drawn as the character you would otherwise type. */
+export const SlashIcon = (props: IconProps) => <Slash {...props} />;
 export const HistoryIcon = (props: IconProps) => <History {...props} />;
 export const TrashIcon = (props: IconProps) => <Trash2 {...props} />;
+export const ArchiveIcon = (props: IconProps) => <Archive {...props} />;
+
+/* The mobile markdown toolbar — see `MarkdownToolbar.tsx`. `Code2` rather than
+   `Code` (already `MonoIcon`, a font mode) so inline code reads differently
+   from a fenced block, which gets its own icon (`SquareCode`) rather than
+   sharing one with the inline mark. */
+export const HeadingIcon = (props: IconProps) => <Heading2 {...props} />;
+export const BoldIcon = (props: IconProps) => <Bold {...props} />;
+export const ItalicIcon = (props: IconProps) => <Italic {...props} />;
+export const InlineCodeIcon = (props: IconProps) => <Code2 {...props} />;
+export const CodeBlockIcon = (props: IconProps) => <SquareCode {...props} />;
+export const LinkPageIcon = (props: IconProps) => <Link2 {...props} />;
+export const QuoteIcon = (props: IconProps) => <Quote {...props} />;
+export const HighlighterIcon = (props: IconProps) => <Highlighter {...props} />;
+export const DividerIcon = (props: IconProps) => <Minus {...props} />;
+export const IndentIcon = (props: IconProps) => <IndentIncrease {...props} />;
 
 /* Spark's longer reach: what it remembers, what it can be handed, what it runs. */
 

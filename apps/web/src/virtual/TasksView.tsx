@@ -4,13 +4,24 @@ import { useApp } from '../app-context';
 
 type Filter = 'open' | 'done' | 'all';
 
+/** Deeper nesting than this reads the same as this — `app.css` has one rule per level. */
+const MAX_DEPTH = 6;
+
 /**
  * The Tasks page — a view, not a file.
  *
- * Every `- [ ]` anywhere in the space appears here, and checking a box rewrites
- * the line in the page it came from. There is no task database and no task
- * object: a task is a line of markdown that happens to look like one, so tasks
- * stay attached to the thinking around them and survive this app entirely.
+ * Every `- [ ]` task on a page marked `tasks: true` in its frontmatter appears
+ * here, and checking a box rewrites the line in the page it came from. There is
+ * no task database and no task object: a task is a line of markdown that happens
+ * to look like one, so tasks stay attached to the thinking around them and
+ * survive this app entirely. The frontmatter gate exists so writing about a
+ * task — a recipe step, a template — is not the same as adding one; opting a
+ * page in is one line at its top. An empty checkbox (`- [ ]` with no text) is a
+ * placeholder, so `parseTasks` never yields one and nothing here shows it.
+ *
+ * Indented by `task.depth`, which `parseTasks` reads off the source line's own
+ * indentation — a subtask nested under its parent in the file nests under it
+ * here too, provided the two land in the same group (see `groupByDue`).
  */
 export function TasksView() {
   const { tasks, refreshTasks, workspace, openPage, toast } = useApp();
@@ -102,7 +113,12 @@ export function TasksView() {
             <section className="listing-group" key={title}>
               <h2 className="listing-group-title">{title}</h2>
               {groupTasks.map((task) => (
-                <div className="task" key={task.id} data-done={task.done}>
+                <div
+                  className="task"
+                  key={task.id}
+                  data-done={task.done}
+                  data-depth={Math.min(task.depth, MAX_DEPTH)}
+                >
                   <input
                     type="checkbox"
                     checked={task.done}
@@ -111,7 +127,7 @@ export function TasksView() {
                     aria-label={task.text}
                   />
                   <div className="task-text">
-                    <div>{task.text || '(empty task)'}</div>
+                    <div>{task.text}</div>
                     <div className="task-meta">
                       <button
                         className="task-source"

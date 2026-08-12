@@ -18,6 +18,9 @@ apps/web/public/fonts/
 .env.local
 .env.bak
 
+# Sensitive logs
+nohup.out
+
 # Agent working notes — local context, not part of the project.
 AGENTS.md
 CLAUDE.md

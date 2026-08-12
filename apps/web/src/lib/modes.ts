@@ -1,3 +1,6 @@
+import type { ComponentType } from 'react';
+import { IdeaIcon, LogIcon, PenIcon, QuestionIcon, TaskIcon } from '../components/Icons';
+
 /**
  * Capture modes.
  *
@@ -11,19 +14,31 @@
 export interface CaptureMode {
   id: string;
   label: string;
-  /** Single character shown in the switcher. */
-  glyph: string;
+  /**
+   * Shown in the switcher. A component reference, not an element — the
+   * consuming `.tsx` renders `<mode.icon />`, which is what lets this file
+   * stay plain data (no JSX) while still naming a real lucide glyph instead
+   * of a Unicode character standing in for one.
+   */
+  icon: ComponentType<{ size?: number; className?: string }>;
   placeholder: string;
   /** Formats one captured chunk into markdown lines. */
   format(text: string, now: Date): string;
 }
 
-/** `journal/2026-07-27` — the page every capture appends to. */
-export function dailyPageName(date = new Date()): string {
+/**
+ * `journal/2026-07-27` — the page every capture appends to.
+ *
+ * `folder` defaults to the app's own default rather than reading the setting
+ * itself: this file has no `workspace` to read it from, and every real call
+ * site has one — see `lib/dirs.ts`'s `journalFolder()`, which is what they
+ * pass.
+ */
+export function dailyPageName(date = new Date(), folder = 'journal'): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
-  return `journal/${y}-${m}-${d}`;
+  return `${folder}/${y}-${m}-${d}`;
 }
 
 export function dailyPageHeading(date = new Date()): string {
@@ -59,14 +74,14 @@ export const CAPTURE_MODES: CaptureMode[] = [
   {
     id: 'note',
     label: 'Note',
-    glyph: '✎',
+    icon: PenIcon,
     placeholder: "What's on your mind?",
     format: (text) => paragraphs(text).join('\n\n'),
   },
   {
     id: 'task',
     label: 'Task',
-    glyph: '☑',
+    icon: TaskIcon,
     placeholder: 'What needs doing?',
     // Each line becomes its own task — dictating a list should give a list.
     format: (text) =>
@@ -77,7 +92,7 @@ export const CAPTURE_MODES: CaptureMode[] = [
   {
     id: 'idea',
     label: 'Idea',
-    glyph: '✦',
+    icon: IdeaIcon,
     placeholder: 'What if…',
     format: (text) =>
       lines(text)
@@ -87,7 +102,7 @@ export const CAPTURE_MODES: CaptureMode[] = [
   {
     id: 'question',
     label: 'Question',
-    glyph: '?',
+    icon: QuestionIcon,
     placeholder: 'What do you want to find out?',
     format: (text) =>
       lines(text)
@@ -97,7 +112,7 @@ export const CAPTURE_MODES: CaptureMode[] = [
   {
     id: 'log',
     label: 'Log',
-    glyph: '◷',
+    icon: LogIcon,
     placeholder: 'What just happened?',
     format: (text, now) =>
       lines(text)

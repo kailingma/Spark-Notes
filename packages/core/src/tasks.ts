@@ -1,6 +1,6 @@
 import type { SpaceApi, Task } from '@spark/plugin-sdk';
 import type { EventBus } from './events.js';
-import { parseTasks, toggleTaskInText } from './markdown.js';
+import { parseFrontmatter, parseTasks, toggleTaskInText } from './markdown.js';
 
 /**
  * The workspace-wide task index that backs the virtual Tasks page.
@@ -55,9 +55,14 @@ export class TaskIndex {
   /**
    * Re-index a single page from text we already have in hand. Called on every
    * save so the Tasks page stays live while you type.
+   *
+   * Matches the server scan's rule: a page counts only with `tasks: true` in
+   * its frontmatter. Checked here too, or toggling that flag on or off would
+   * not take effect until the next full rescan.
    */
   update(page: string, text: string): void {
-    const tasks = parseTasks(page, text);
+    const tasks =
+      parseFrontmatter(text).data.tasks === 'true' ? parseTasks(page, text) : [];
     const previous = this.#byPage.get(page);
 
     if (tasks.length === 0) {

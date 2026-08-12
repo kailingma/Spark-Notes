@@ -84,8 +84,12 @@ export function MemoryView() {
 
         <span className="header-spacer" />
 
-        <button className="button" disabled={busy || !config.ai} onClick={() => void consolidate()}>
-          <SyncIcon />
+        <button
+          className="button button-sm"
+          disabled={busy || !config.ai}
+          onClick={() => void consolidate()}
+        >
+          <SyncIcon size={13} />
           {busy ? 'Consolidating…' : 'Consolidate now'}
         </button>
       </header>
@@ -128,14 +132,6 @@ export function MemoryView() {
               onOpen={openPage}
             />
           )}
-
-          <p className="memory-footer">
-            {snapshot.lastPass > 0
-              ? `Last consolidated ${new Date(snapshot.lastPass).toLocaleString()}.`
-              : 'Never consolidated.'}{' '}
-            Consolidation runs at the end of a conversation when there is enough
-            waiting, never on its own — Spark does not act while you are away.
-          </p>
         </div>
       )}
     </div>

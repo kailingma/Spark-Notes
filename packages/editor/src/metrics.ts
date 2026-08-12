@@ -39,6 +39,9 @@ let current: Measurement | null = null;
  */
 const CHECKBOX_EM = 1.4;
 
+/** Advance of the bullet dot, from `.cm-spark-bullet`'s `width: 1.1em` in `theme.ts`. */
+const BULLET_EM = 1.1;
+
 /** Used until the first real measurement lands; calibrated against Quattro. */
 const FALLBACK_HASH_EM = 0.52;
 
@@ -60,6 +63,20 @@ export function textHang(view: EditorView, prefix: string): string {
 export function checkboxHang(view: EditorView, indent: string): string {
   const px = indent.length === 0 ? 0 : measureText(view, indent);
   return px === null ? `${CHECKBOX_EM + indent.length * 0.5}ch` : `calc(${px}px + ${CHECKBOX_EM}em)`;
+}
+
+/**
+ * The outdent for a plain list line, where a dot stands in for `-`/`*`/`+`.
+ *
+ * `before` is the indent and `after` is the whitespace between the marker and
+ * the text — both still ordinary characters either side of the widget, so
+ * they are measured together the same way `checkboxHang` measures the indent
+ * around the checkbox.
+ */
+export function bulletHang(view: EditorView, before: string, after: string): string {
+  const whitespace = before + after;
+  const px = whitespace.length === 0 ? 0 : measureText(view, whitespace);
+  return px === null ? `${BULLET_EM + whitespace.length * 0.5}ch` : `calc(${px}px + ${BULLET_EM}em)`;
 }
 
 // ---------------------------------------------------------------------------

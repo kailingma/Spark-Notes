@@ -103,6 +103,34 @@ export class GitService {
   }
 
   /**
+   * Clones a repository into the space, replacing whatever is there.
+   *
+   * Deliberately refused unless the space is empty: a clone by definition
+   * overwrites the working tree, and never losing a keystroke is the first
+   * product principle. Someone who already has notes is told to attach the
+   * remote instead, which pushes what is theirs without touching a file.
+   */
+  async clone(remoteUrl: string): Promise<GitStatus> {
+    const token = this.getToken();
+    if (!token) throw new Error('Connect a GitHub account before syncing.');
+    if (await this.#isRepo()) throw new Error('The space is already a repository.');
+    if ((await this.space.list()).length > 0) {
+      throw new Error('The space already has notes — attach it as a remote instead of cloning into it.');
+    }
+
+    await git.clone({
+      fs,
+      http,
+      dir: dir(),
+      url: remoteUrl,
+      ref: config.git.branch,
+      singleBranch: true,
+      onAuth: () => ({ username: token, password: 'x-oauth-basic' }),
+    });
+    return this.status();
+  }
+
+  /**
    * One full reconcile: commit local work, fetch, merge, push.
    *
    * Committing first is deliberate — it means a merge always has a real base

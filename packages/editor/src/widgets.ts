@@ -13,22 +13,47 @@ export class CheckboxWidget extends WidgetType {
     readonly checked: boolean,
     readonly from: number,
     readonly to: number,
+    /**
+     * True when the selection covers the marker's range.
+     *
+     * The selection highlight is drawn *behind* this widget, so a checked
+     * box's opaque fill would otherwise sit as a gap in the middle of a
+     * highlighted line. The live preview pass re-runs on every selection
+     * change, so this is recomputed per build and `eq()` sees it — moving the
+     * caret across the box re-renders it into (or out of) the highlight.
+     */
+    readonly selected = false,
   ) {
     super();
   }
 
   eq(other: CheckboxWidget): boolean {
-    return other.checked === this.checked && other.from === this.from;
+    return (
+      other.checked === this.checked &&
+      other.from === this.from &&
+      other.selected === this.selected
+    );
   }
 
   toDOM(view: EditorView): HTMLElement {
+    // A wrapper rather than listening on the input itself: `.cm-spark-checkbox-hit`
+    // grows the *clickable* area past the visible box (see theme.ts) via an
+    // absolutely-positioned pseudo-element, which a fat finger needs without the
+    // rendered square changing size. Absolute positioning keeps the extra area out
+    // of flow entirely, so it cannot perturb the line's height metrics the way a
+    // margin on the box itself would (see AGENTS.md: never `margin` on `.cm-line`).
+    const wrap = document.createElement('span');
+    wrap.className = 'cm-spark-checkbox-hit';
+    if (this.selected) wrap.dataset.selected = '';
+
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.className = 'cm-spark-checkbox';
     input.checked = this.checked;
     input.setAttribute('aria-label', this.checked ? 'Completed task' : 'Open task');
+    wrap.appendChild(input);
 
-    input.addEventListener('mousedown', (event) => {
+    wrap.addEventListener('mousedown', (event) => {
       // Alt means "show me the markdown": let the click fall through so the
       // cursor lands on the line and the `[ ]` is revealed for editing.
       if (event.altKey) return;
@@ -46,9 +71,35 @@ export class CheckboxWidget extends WidgetType {
       });
     });
 
-    return input;
+    return wrap;
   }
 
+  ignoreEvent(): boolean {
+    return false;
+  }
+}
+
+/**
+ * A centered dot standing in for a plain list item's `-`, `*` or `+`.
+ *
+ * The raw character sits on the text baseline, which reads as a small hyphen
+ * rather than a bullet. A real list gets a mark centered on the line instead —
+ * the same shape regardless of which of the three characters was typed, since
+ * none of them means anything different. It reveals back to the literal
+ * character the moment the cursor is on it, same as every other quiet marker.
+ */
+export class BulletWidget extends WidgetType {
+  eq(): boolean {
+    return true;
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement('span');
+    span.className = 'cm-spark-bullet';
+    return span;
+  }
+
+  /** Events reach the editor, so clicking the dot places the cursor and reveals it. */
   ignoreEvent(): boolean {
     return false;
   }
@@ -160,26 +211,51 @@ export class ImageWidget extends WidgetType {
   constructor(
     readonly src: string,
     readonly alt: string,
+    /** `|300` or `|300x200` in the alt text: width, or width and height. */
+    readonly width?: number,
+    readonly height?: number,
   ) {
     super();
   }
 
   eq(other: ImageWidget): boolean {
-    return other.src === this.src && other.alt === this.alt;
+    return (
+      other.src === this.src &&
+      other.alt === this.alt &&
+      other.width === this.width &&
+      other.height === this.height
+    );
   }
 
-  toDOM(): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
     const wrap = document.createElement('span');
     wrap.className = 'cm-spark-image';
 
     const img = document.createElement('img');
     img.src = this.src;
     img.alt = this.alt;
-    img.loading = 'lazy';
+    // The `width`/`height` attributes size the image in CSS pixels. When only
+    // the width is given the height follows the intrinsic ratio; when both are
+    // given they are honoured exactly, like Obsidian does. `.cm-spark-image
+    // img`'s `max-width: 100%` still clamps an oversized choice to the column.
+    if (this.width) img.width = this.width;
+    if (this.height) img.height = this.height;
+    // Not `lazy`: a lazy image inside a widget has no height until it scrolls
+    // into view, which is exactly when CodeMirror is measuring the line it is
+    // in. The picture then arrives and pushes everything below it down against
+    // a height map that still says the line is one row tall — which is what
+    // makes a click land several lines above where it was aimed.
+    img.loading = 'eager';
+    img.addEventListener('load', () => {
+      // The line just changed height by however tall the picture turned out to
+      // be, and nothing in the document changed to tell CodeMirror so.
+      view.requestMeasure();
+    });
     // A broken image should degrade to its alt text, not a browser icon.
     img.addEventListener('error', () => {
       wrap.classList.add('cm-spark-image-broken');
       wrap.textContent = this.alt || this.src;
+      view.requestMeasure();
     });
 
     wrap.appendChild(img);

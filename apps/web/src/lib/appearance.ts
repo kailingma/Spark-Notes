@@ -80,6 +80,8 @@ export interface Appearance {
 
 export const DEFAULT_APPEARANCE: Appearance = {
   theme: 'system',
+  // The id the built-in themes plugin registers for the app's own look. It is
+  // the one place that name is decided; `themes.ts` registers under it.
   themeId: 'spark',
   font: 'sans',
   fontPack: null,

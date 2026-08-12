@@ -8,5 +8,6 @@ export * from './settings.js';
 export * from './space.js';
 export * from './sync.js';
 export * from './tasks.js';
+export * from './templates.js';
 export * from './workspace.js';
 export type * from '@spark/plugin-sdk';

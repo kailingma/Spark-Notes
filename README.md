@@ -1,6 +1,6 @@
 # Spark
 
-Markdown notes with as little friction as possible.
+Markdown notes app  with as little friction as possible.
 
 Spark is a notes platform built around one idea: the fastest path from a thought
 to a saved note should be nearly zero. It opens as a blank editor. Markdown
@@ -18,7 +18,7 @@ typeface, [iA Writer Quattro](https://github.com/iaolo/iA-Fonts).
 
 ```bash
 npm install
-npm run fonts     # downloads the reading and interface faces (all SIL OFL)
+npm run fonts     # ~11 MB of typefaces, all SIL OFL, fetched not committed
 npm run dev       # server on :3001, app on :3000
 ```
 
@@ -55,6 +55,7 @@ is fine and says nothing.
 | `SPARK_SPACE` | `./space` | The notes directory. **This is the database.** Point it at any folder of markdown. |
 | `SPARK_STATE` | `./.spark` | Server-side state (GitHub token, AI key). Never inside the space, never in git. |
 | `PORT` | `3001` | Server port. |
+| `HOST` | `0.0.0.0` | Interface to bind. The default (every interface) makes the app reachable from other machines on the network, which is what a container needs to be reachable at all. Set `127.0.0.1` to restrict it to the local machine. |
 | `SPARK_SPACE_NAME` | `Spark` | Display name. |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | — | Starting AI credentials. Usually easier to set in Settings → AI. |
 | `SPARK_AI_PROVIDER` | inferred | `openai` or `anthropic`. Inferred from whichever key is present. |
@@ -74,6 +75,45 @@ SPARK_SPACE=~/Documents/notes npm run dev
 
 ---
 
+## Docker
+
+Pushes to the `main` branch build a container and publish it to GitHub Container
+Registry as **`ghcr.io/<you>/<repo>`**, tagged `latest` and `main`; releases
+(`v*` tags) are tagged with the tag name.
+
+```bash
+# Run once, mounting a folder of notes and a state directory.
+# No ports are published to the host by default — `-p` does that.
+docker run -d \
+  --name spark-notes \
+  -p 3001:3001 \
+  -v /path/to/notes:/data/space \
+  -v /path/to/state:/data/state \
+  -e SPARK_ORIGIN=https://notes.example.com \
+  ghcr.io/kailingma/spark-notes
+```
+
+A brand-new notes folder gets seeded on first boot; a folder that already
+contains markdown is used as-is. State (the GitHub token, AI keys) lives in the
+`/data/state` volume, space (your notes) in `/data/space` — keep them apart, so
+sync can't push credentials. Without a volume, an empty container writes notes
+to a fresh `/data/space`; once the container is deleted they go with it.
+
+The image ships without the curated typefaces (~12 MB of OFL fonts are fetched,
+not committed — see `scripts/fetch-fonts.mjs`). The named modes (Sans, Serif,
+Mono) fall back to system faces. To include them:
+
+```bash
+docker build --build-arg FETCH_FONTS=1 -t spark-notes .
+```
+
+Every other variable in the table above (and the rest of `.env.example`) works
+unchanged as a `-e` or `--env-file`. Inside the container the server listens on
+port `3001` and binds all interfaces (`HOST=0.0.0.0`) so the published port
+reaches it.
+
+---
+
 ## How it works
 
 ### Storage is a folder
@@ -83,7 +123,15 @@ storage layer. Grep it, edit it in vim, sync it with Dropbox, commit it by hand
 — Spark has no opinion, because it has no index to keep in step.
 
 Files under `_plugins/` with a `.js` extension are stored verbatim; everything
-else is markdown.
+else is markdown. Four folders in a space hold something other than your prose,
+and all four are still plain files you can read, edit and delete:
+
+| Folder | What is in it |
+| --- | --- |
+| `_plugins/` | Plugins, as ES modules. Yours to write |
+| `_skills/` | Procedures Spark should follow, as `SKILL.md` |
+| `memory/` | What Spark has learned about you |
+| `files/` | Attachments, referenced from notes as ordinary markdown links |
 
 ### Online mode, and opt-in sync mode
 
@@ -147,6 +195,7 @@ Some pages are views over the space rather than files in it:
 | `Tasks` | Every `- [ ]` in the space |
 | `Tags` | Every tag, with counts |
 | `tags/<name>` | Everywhere one tag is used |
+| `Memory` | What Spark has learned about you, and where each part of it lives |
 
 They have real page names, so `[[Tasks]]` and `[[tags/idea]]` are ordinary
 links, they can be bookmarked, and they show up in backlinks — but nothing is
@@ -170,7 +219,7 @@ The microphone transcribes on-device via the browser's speech recognition, and
 appends into the same box you can type in. With an AI key configured, spoken
 captures can optionally be tidied into structured notes — opt-in, per capture.
 
-### AI
+### AI (Spark)
 
 Every AI entry point is a command or a slash command **you** trigger. Nothing
 watches your keystrokes, nothing pre-fetches, and the model never speaks first.
@@ -188,14 +237,88 @@ a personal server, though: anyone who can reach it can already read your notes,
 and the key is protected to that same standard and no further. If you expose it
 beyond localhost, put it behind TLS.
 
+### Spark, and what it learns
+
+Spark is the assistant in the right-hand panel. It reads and writes the pages in
+your space, and over time it stops needing to be told the same things twice.
+
+**It remembers, in files you can read.** Correct it once — "meeting notes go in
+`meetings/`" — and it writes that down. What it knows lives in four markdown
+files in your own space: `memory/essentials` (facts about you),
+`memory/conventions` (how you want your space worked in, and how you want to be
+written to), `memory/threads` (what is outstanding) and `memory/buffer` (things
+it noticed but has not judged). Open **Memory** to see all of it on one screen,
+delete any line you disagree with, or edit the files in vim — they are just
+notes. `git log memory/` is the history of everything it has ever concluded
+about you.
+
+Threads are written as ordinary `- [ ]` tasks, so they show up in **Tasks** with
+everything else, and ticking one there is how you tell Spark it is finished.
+
+Every so often, at the end of a conversation you started, Spark reviews the
+buffer and decides what to keep, what to merge into something it already knew,
+and what to throw away. It never does this on a timer: nothing here runs while
+you are away.
+
+**It learns procedures too.** A folder in `_skills/` with a `SKILL.md` in it is a
+job you want done a particular way, written once — the seeded
+`_skills/weekly-review/` is a working example. Spark is told what each skill is
+for and reads the instructions when the job comes up, so a folder of twenty costs
+nothing until one is needed. Tell it how you want something done and ask it to
+remember, and it will write the skill itself.
+
+**You can hand it files.** Drag one onto the composer, paste a screenshot, or use
+the paperclip. Uploads land in `files/` in your space as ordinary files, and what
+Spark writes into a note is an ordinary markdown link — so an attachment survives
+the app exactly as a note does. Images and PDFs it can look at; text, CSV, JSON
+and code it can read. Anything else it will tell you it cannot read rather than
+guessing.
+
+**It can search by meaning**, not just by words. Word search always works and
+needs nothing set up. Name an embedding model in **Settings → Spark** and "what
+did I decide about pricing" will also find the paragraph that never says pricing.
+
+**It can run code, if you let it.** Off by default and switched on in the
+server's environment rather than in the app, because whether a machine will
+execute generated code is a decision about the machine. With it on, Spark answers
+the arithmetic questions — total this column, count these across months, reshape
+this CSV — by writing a few lines of Python and running them, rather than by
+estimating. `SPARK_SANDBOX=docker` gives it a container with no network; see
+`.env.example` for what the other options do and do not protect.
+
+Each of these is a separate switch in **Settings → Spark**, and the server
+enforces all of them again on its own — a capability Spark was not given is a
+tool it is never told about, so it cannot be talked into one.
+
 ### Appearance
 
 **Settings → Appearance** holds the theme, the window mode, and type — chosen
 twice, once for your notes and once for everything around them.
 
+*Themes.* Twelve palettes, each in light and dark, shown as a gallery of
+miniatures rather than a list of names: every card is a small page in the theme it
+stands for, with that theme's paper, ink, accent and title face. Paper is cream
+stock and brick red; Ink is almost monochrome; Fjord, Ember, Solar and Rosé for
+anyone who has had a favourite terminal colour scheme since 2011; Terminal is
+phosphor green; Bloom is high chroma and no apology; Noir is black, white, one
+red and no rounded corners. A theme's colours apply whatever else you have set.
+
 *Document type* is the reading font — sans (Inter), serif (Source Serif 4, with
-Fraunces for titles) or mono (iA Writer Mono) — the text size in px, and the
-reading width.
+Fraunces for titles), mono (iA Writer Mono), or **curated** — the text size in px,
+and the reading width.
+
+*Curated* is the interesting one. It means "whatever this was designed to be read
+in": the pairing the theme was built around, or one of thirteen font packs from
+the dropdown beside it. A pack is a title face, a reading face, an interface face
+and a monospace chosen together, plus the numbers that make a title behave like
+one — so Editorial gives you Playfair italics over a news serif, Stretch pulls
+Archivo out to 125% and slants it, Condensed squeezes Bricolage to 75% in caps,
+Wonk turns Fraunces' wonk axis all the way up, Poster sets every heading in
+Anton, and Legible is Atkinson Hyperlegible with more air than usual. The two
+sides of the app can draw from different packs.
+
+Picking Sans, Serif or Mono keeps a theme's palette and drops its voice. That is
+deliberate: choosing a sans should mean a sans.
 
 *Interface type* is the face and size of everything that is not a document:
 tabs, panels, the navigator, Spark, the status bar, settings itself. Sans and
@@ -207,6 +330,9 @@ of a pixel — at 0.75rem a label moves in smaller steps than the number suggest
 Code and tables stay monospaced under every combination, because column
 alignment is part of what they mean. Everything here is per-device and never
 synced.
+
+Both the themes and the font packs are ordinary extensions using the ordinary
+plugin API, so a file in `_plugins/` can add its own — see below.
 
 ---
 
@@ -232,10 +358,30 @@ export default definePlugin({
 ```
 
 Plugins get commands (with keybindings), slash commands, inline markdown
-widgets, space read/write, editor control, events, scoped settings, and AI. The
-built-in features use exactly the same API — there is no privileged internal
-surface. See `packages/plugin-sdk/src/index.ts` for the full contract, and
-`_plugins/word-count.js` in a fresh space for a working example.
+widgets, space read/write, editor control, events, scoped settings, AI, and
+themes. The built-in features use exactly the same API — there is no privileged
+internal surface. See `packages/plugin-sdk/src/index.ts` for the full contract,
+and `_plugins/word-count.js` in a fresh space for a working example.
+
+A theme is data, so a plugin that adds one is short:
+
+```js
+spark.themes.register({
+  id: 'my-theme',
+  name: 'My theme',
+  // Ten colours; the text ramp, rules and code chips are derived from them.
+  light: { bg: '#f7f3ea', text: '#23201a', accent: '#a8341f' },
+  dark: { bg: '#171512', text: '#ece4d4', accent: '#e2755c' },
+  // The pairing Curated will wear — a pack you registered, or one of the
+  // thirteen that ship with the app.
+  fontPack: 'editorial',
+});
+```
+
+`spark.themes.registerFonts()` does the same for a font pack, including the
+`@font-face` declarations for faces it brings with it. Everything the app's own
+Appearance panel offers is reachable this way, which is the only way to know the
+surface is good enough.
 
 ---
 
@@ -272,7 +418,8 @@ packages/
                 desktop shell would reuse as-is.
   editor/       CodeMirror 6 + live syntax hiding. No UI framework either.
 apps/
-  server/       Hono API, filesystem space, git sync, GitHub auth, AI proxy.
+  server/       Hono API, filesystem space, git sync, GitHub auth, AI proxy,
+                Spark's memory, skills, retrieval, attachments and sandbox.
   web/          React shell: capture, palette, tasks, sync, mobile toolbar.
 ```
 
@@ -295,6 +442,13 @@ web app is one shell among several rather than the place the logic lives.
 
 ## Licence
 
-Application code is yours to license as you see fit. iA Writer Quattro and Mono
-are © iA Inc., under the SIL Open Font License 1.1, and are downloaded rather
-than committed.
+Application code is yours to license as you see fit.
+
+Every typeface is under the **SIL Open Font License 1.1** and is downloaded by
+`npm run fonts` rather than committed, so nothing here redistributes a binary.
+iA Writer Quattro and Mono are © iA Inc. The rest — Inter, Source Serif 4,
+Fraunces, IBM Plex Sans/Serif/Mono, Playfair Display, Newsreader, Instrument
+Sans/Serif, Space Grotesk, Space Mono, Archivo, Bricolage Grotesque, Work Sans,
+Libre Franklin, Manrope, Bodoni Moda, EB Garamond, DM Serif Display, Anton,
+Unbounded, Atkinson Hyperlegible, Lexend and JetBrains Mono — belong to their
+respective authors; `scripts/fetch-fonts.mjs` names the source of each file.

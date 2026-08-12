@@ -107,6 +107,10 @@ export interface EditorApi {
   focus(): void;
   /** Wrap the selection in `before`/`after`, or unwrap if already wrapped. */
   toggleWrap(before: string, after?: string): void;
+  /** Moves the outline element at the cursor (heading, list item, paragraph, table row). dir: -1 up, 1 down. */
+  moveItem(dir: -1 | 1): boolean;
+  /** Indents (outdent=false) or outdents (true) the list item or heading at the cursor. */
+  indentItem(outdent: boolean): boolean;
   /** Fires on every document change. */
   onChange(fn: (text: string) => void): Unsubscribe;
 }
@@ -420,7 +424,13 @@ export type ThemeToken =
   | 'radius-lg'
   | 'gutter'
   | 'editor-line-height'
-  | 'editor-measure'
+  /*
+   * Not listed, deliberately: `editor-measure`. The reading width is a slider in
+   * the appearance settings, written as an inline style on the document element,
+   * which no stylesheet can outrank — so a theme setting it would do nothing at
+   * all, and a token that cannot take effect is worse than a missing one. How
+   * wide a line runs before it wraps belongs to the person reading it.
+   */
   /**
    * The three built-in reading modes, and the two interface ones. Overriding
    * these changes what Sans / Serif / Mono *mean*, so a theme can re-letter the

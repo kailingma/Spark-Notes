@@ -1,88 +1,144 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { isValidPageName, normalizePageName, pageBasename } from '@spark/core';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { isValidPageName, normalizePageName, pageBasename, pageFolder } from '@spark/core';
 import { useApp } from '../app-context';
 import {
-  ChevronIcon,
   ColumnsIcon,
+  CopyIcon,
+  CutIcon,
+  FloatIcon,
   FolderPlusIcon,
-  HistoryIcon,
   ListIcon,
+  PasteIcon,
+  PageIcon,
+  PenIcon,
   PlusIcon,
+  SearchIcon,
+  SplitIcon,
+  TrashIcon,
   TreeIcon,
+  UploadIcon,
 } from '../components/Icons';
-import { dailyPageName } from '../lib/modes';
-import { startPointerDrag } from '../windows/drag';
+import {
+  PopoverMenu,
+  anchorPoint,
+  usePopover,
+  type MenuEntry,
+} from '../components/Popover';
+import { modKey } from '../lib/device';
+import { chooseFiles, describeUpload, uploadFiles } from '../lib/uploads';
+import { DRAG_THRESHOLD } from '../windows/drag';
 import { useWindows } from '../windows/manager';
 import { locate } from '../windows/model';
-import { VIRTUAL_INDEX } from '../virtual';
+import { PLACES_VIEW } from '../windows/views';
 import { ColumnsMode, ListMode, TreeMode } from './modes';
-import { useRecentPages } from './recents';
-import { PageRow } from './rows';
+import {
+  copyEntry,
+  deleteEntry,
+  describeClipboard,
+  moveEntry,
+  pagesOf,
+  pasteInto,
+  renameEntry,
+  setClipboard,
+  useClipboard,
+  useNavigatorOperations,
+  type Entry,
+} from './operations';
+import { type RowActions } from './rows';
+import { usePersisted } from './section';
 import { ancestorsOf, buildTree, filterPages, type SortMode } from './tree';
 
 /**
- * The navigator.
+ * The navigator: everything there is, and what you can do to it.
  *
- * Four sections, each answering a different question, in the order you ask
- * them: *what can I look at* (views), *what am I in the middle of* (recent),
- * *what happened lately* (journal), and *what is there* (the pages browser).
- * The first three are short and fixed; the browser takes whatever is left,
- * which is what stops the rail turning into a list of headings.
+ * It used to be four sections in one rail — the three "places you go" lists
+ * plus the pages browser — split across a seam you could drag. The places are
+ * their own panel now (`Places.tsx`), which leaves this doing one job: a search
+ * field and a browser under it, in whichever of the three shapes suits what you
+ * are looking for.
  *
- * Those two jobs are also **two halves** of the rail, divided by a seam you can
- * drag: *places you go* on top, *everything there is* underneath. They share one
- * panel rather than being two panels — the seam is the only thing between them,
- * and until you drag it the top half is exactly as tall as its contents, so the
- * rail opens looking like the single list it used to be.
+ * The three modes are a real choice rather than a skin — see `modes.tsx`.
+ * Columns need width to work, so the switcher only offers them when there is
+ * width to give, and a search result ignores the mode entirely: once you have
+ * typed a query you are looking for a page, not for where it lives.
  *
- * Each half closes on its own, and closing the last open one closes the rail
- * itself: a rail showing two collapsed strips is a closed rail with extra steps.
- * Both halves are reopened on the way out, so the header toggle brings back the
- * ordinary arrangement rather than the dead end you left.
- *
- * The browser has three modes, and the choice is real rather than cosmetic —
- * see `modes.tsx`. Columns need width to work, so the switcher only offers them
- * when there is width to give.
+ * What is new here beyond the split is that the rows *do* things. Rename, move,
+ * duplicate, delete and a cut/copy/paste clipboard, reachable by right-click;
+ * dragging a row into the workbench to open it in a tab, a split or a window;
+ * and dragging one onto a folder to move it there. Before this, the only verb
+ * the navigator had was "open", and everything else meant going to Finder.
  */
 
 type Mode = 'tree' | 'list' | 'columns';
 
-/** The two halves of the rail. */
-type Half = 'places' | 'pages';
-
 /** Below this the columns mode is not offered — two columns stop being legible. */
 const COLUMNS_MIN_WIDTH = 460;
 
-/** A half never drags below its own header plus a row or two of content. */
-const MIN_HALF = 96;
+/** One chunk `/api/search` found, mirroring `retrieval.ts`'s `Hit`. */
+interface SearchHit {
+  page: string;
+  line: number;
+  text: string;
+  heading?: string;
+  score: number;
+  found: Array<'text' | 'meaning'>;
+}
+
+/** Nobody types a one-character query expecting a content scan of the whole space. */
+const MIN_CONTENT_QUERY = 2;
+const CONTENT_SEARCH_DEBOUNCE = 200;
 
 export function Navigator({ instanceId }: { instanceId: string }) {
   const { pages, folders, workspace, route, refreshPages, refreshFolders, toast } = useApp();
-  const { openPage, narrow, layout, toggleSidebar, closeView } = useWindows();
+  const { openPage, openFind, narrow, layout, startDrag, drag, openPlaces } = useWindows();
+  const popover = usePopover();
+  const clipboard = useClipboard();
 
   const hostRef = useRef<HTMLElement>(null);
-  const halvesRef = useRef<HTMLDivElement>(null);
-  const placesRef = useRef<HTMLElement>(null);
   const [width, setWidth] = useState(0);
   const [query, setQuery] = useState('');
+  const [contentHits, setContentHits] = useState<SearchHit[]>([]);
+
+  // A fast, global, content-aware search alongside the instant filename
+  // filter below — `filterPages` only ever matched a page's name, so a word
+  // that's only in a page's body was invisible to search entirely.
+  // Debounced and cancellable per keystroke: `find()` on the server chunks
+  // and scores the whole space on every call, which is cheap once but not
+  // something to run on every single character of a fast typist.
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < MIN_CONTENT_QUERY) {
+      setContentHits([]);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      fetch(`/api/search?q=${encodeURIComponent(q)}&limit=8`, { signal: controller.signal })
+        .then((res) => (res.ok ? (res.json() as Promise<{ hits: SearchHit[] }>) : null))
+        .then((result) => {
+          if (result) setContentHits(result.hits);
+        })
+        .catch(() => {
+          // Aborted by the next keystroke, or the request failed — either
+          // way the filename matches above still answer the search.
+        });
+    }, CONTENT_SEARCH_DEBOUNCE);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query]);
 
   const [mode, setMode] = usePersisted<Mode>('nav.mode', 'tree');
   const [sort, setSort] = usePersisted<SortMode>('nav.sort', 'recent');
-  const [placesOpen, setPlacesOpen] = usePersisted('nav.half.places', true);
-  const [pagesOpen, setPagesOpen] = usePersisted('nav.half.pages', true);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(
     () => new Set(workspace.settings.get<string[]>('nav.expanded', [])),
   );
 
-  // `null` is "as tall as its contents", which is where the seam starts.
-  const [placesHeight, setPlacesHeight] = useState<number | null>(() =>
-    workspace.settings.get<number | null>('nav.placesHeight', null),
-  );
-
   const currentPage = route.kind === 'page' ? route.page : null;
 
-  // On a phone the rail is a drawer you opened to go somewhere; a mode switcher,
-  // a sort control and four collapsible sections are all in the way of that.
+  // On a phone the rail is a drawer you opened to go somewhere; a mode switcher
+  // and a sort control are both in the way of that.
   const wide = width >= COLUMNS_MIN_WIDTH && !narrow;
   const effectiveMode: Mode = narrow ? 'list' : mode === 'columns' && !wide ? 'tree' : mode;
 
@@ -93,6 +149,12 @@ export function Navigator({ instanceId }: { instanceId: string }) {
     observer.observe(host);
     return () => observer.disconnect();
   }, []);
+
+  const refresh = useCallback(async () => {
+    await Promise.all([refreshPages(), refreshFolders()]);
+  }, [refreshPages, refreshFolders]);
+
+  const run = useNavigatorOperations(workspace, pages, refresh, toast);
 
   const toggleFolder = useCallback(
     (path: string) => {
@@ -128,6 +190,21 @@ export function Navigator({ instanceId }: { instanceId: string }) {
   );
 
   /**
+   * A content hit is a page *and* a place: it opens the page at the chunk's
+   * line, and the phrase that found it becomes a find within that document —
+   * highlighting every match and letting you step through them. A title match
+   * has nowhere to point; a content match pointing nowhere is half a search.
+   */
+  const openContentHit = useCallback(
+    (hit: SearchHit, event: React.MouseEvent) => {
+      const mode = event.metaKey || event.ctrlKey ? 'split-right' : 'tab';
+      const id = openPage(hit.page, { mode, line: hit.line });
+      if (id) openFind(query.trim(), id);
+    },
+    [openPage, openFind, query],
+  );
+
+  /**
    * Creating things.
    *
    * A page is created for real, with a heading, rather than navigated to: a
@@ -152,13 +229,13 @@ export function Navigator({ instanceId }: { instanceId: string }) {
           return;
         }
         await workspace.space.write(name, `# ${pageBasename(name)}\n\n`, '');
-        await Promise.all([refreshPages(), refreshFolders()]);
+        await refresh();
         openPage(name, { line: 1 });
       } catch (err) {
         toast(err instanceof Error ? err.message : String(err), 'error');
       }
     },
-    [workspace, openPage, refreshPages, refreshFolders, toast],
+    [workspace, openPage, refresh, toast],
   );
 
   const newFolder = useCallback(async () => {
@@ -173,184 +250,276 @@ export function Navigator({ instanceId }: { instanceId: string }) {
     }
   }, [workspace, refreshFolders, toast]);
 
-  /**
-   * Closing a half, and closing the last one.
-   *
-   * Two halves closed is not a navigator with nothing in it, it is a panel you
-   * shut — so it becomes exactly that, by the same route the header toggle
-   * takes. Both halves are set open first, so what comes back when you reopen
-   * the rail is the ordinary two-part navigator; a rail that reopened onto two
-   * collapsed strips would be a dead end you had to work out how to leave.
-   *
-   * A floated navigator closes its window instead, for the same reason and with
-   * the same result: the toggle reopens it in its rail, whole.
-   */
-  const toggleHalf = useCallback(
-    (half: Half) => {
-      const next = half === 'places' ? !placesOpen : !pagesOpen;
-      const other = half === 'places' ? pagesOpen : placesOpen;
+  /** Puts files in `files/`, from the rail rather than only from a chat. */
+  const upload = useCallback(async () => {
+    const chosen = await chooseFiles();
+    if (chosen.length === 0) return;
+    const outcome = await uploadFiles(chosen);
+    await refresh();
+    const said = describeUpload(outcome);
+    toast(said.message, said.ok ? 'success' : 'error');
+  }, [refresh, toast]);
 
-      if (!next && !other) {
-        setPlacesOpen(true);
-        setPagesOpen(true);
-        const home = locate(layout, instanceId);
-        if (home?.surface === 'sidebar') toggleSidebar(home.side);
-        else closeView(instanceId);
-        return;
-      }
+  // -- acting on a row ------------------------------------------------------
 
-      if (half === 'places') setPlacesOpen(next);
-      else setPagesOpen(next);
+  const menuFor = useCallback(
+    (entry: Entry): MenuEntry[] => {
+      const label = entryLabel(entry);
+      const isPage = entry.kind === 'page';
+      const folderOf = isPage ? pageFolder(entry.path) : entry.path;
+      const pasteLabel = describeClipboard(clipboard);
+      const count = pagesOf(pages, entry).length;
+
+      return [
+        ...(isPage
+          ? [
+              {
+                id: 'open',
+                label: 'Open',
+                icon: <PageIcon />,
+                run: () => void openPage(entry.path),
+              },
+              {
+                id: 'open-split',
+                label: 'Open in a split',
+                icon: <SplitIcon />,
+                run: () => void openPage(entry.path, { mode: 'split-right', duplicate: true }),
+              },
+              {
+                id: 'open-window',
+                label: 'Open in a window',
+                icon: <FloatIcon />,
+                run: () => void openPage(entry.path, { mode: 'window', duplicate: true }),
+              },
+              { kind: 'separator' as const, id: 'sep-open' },
+            ]
+          : [
+              {
+                id: 'new-page',
+                label: 'New page here',
+                icon: <PlusIcon />,
+                run: () => void newPage(entry.path),
+              },
+              { kind: 'separator' as const, id: 'sep-open' },
+            ]),
+
+        {
+          id: 'cut',
+          label: 'Cut',
+          icon: <CutIcon />,
+          hint: `${modKey}X`,
+          run: () => setClipboard({ mode: 'cut', entries: [entry] }),
+        },
+        {
+          id: 'copy',
+          label: 'Copy',
+          icon: <CopyIcon />,
+          hint: `${modKey}C`,
+          run: () => setClipboard({ mode: 'copy', entries: [entry] }),
+        },
+        {
+          id: 'paste',
+          label: pasteLabel ?? 'Paste',
+          icon: <PasteIcon />,
+          disabled: pasteLabel === null,
+          run: () =>
+            void run(
+              (context) => pasteInto(context, clipboard!, folderOf),
+              (result) => `Pasted ${result.moved} page${result.moved === 1 ? '' : 's'}.`,
+            ),
+        },
+        {
+          id: 'duplicate',
+          label: 'Duplicate',
+          icon: <CopyIcon />,
+          run: () =>
+            void run(
+              (context) => copyEntry(context, entry, pageFolder(entry.path)),
+              (result) => `Duplicated as ${result.destination}.`,
+            ),
+        },
+        { kind: 'separator' as const, id: 'sep-edit' },
+        {
+          id: 'rename',
+          label: 'Rename…',
+          icon: <PenIcon />,
+          run: async () => {
+            const next = await workspace.ui.prompt(`Rename ${label}`, label);
+            if (!next || next === label) return;
+            const result = await run(
+              (context) => renameEntry(context, entry, next),
+              (outcome) => `Renamed to ${outcome.destination}.`,
+            );
+            // Follow a renamed page: you were probably reading it.
+            if (result?.destination && isPage && currentPage === entry.path) {
+              openPage(result.destination);
+            }
+          },
+        },
+        {
+          id: 'delete',
+          label: isPage ? 'Delete' : `Delete folder (${count} pages)`,
+          icon: <TrashIcon />,
+          danger: true,
+          run: async () => {
+            const question = isPage
+              ? `Delete “${entry.path}”?`
+              : `Delete “${entry.path}” and the ${count} page${count === 1 ? '' : 's'} in it?`;
+            const answer = await workspace.ui.select(question, ['Delete', 'Cancel']);
+            if (answer !== 'Delete') return;
+            await run(
+              (context) => deleteEntry(context, entry),
+              (result) => `Deleted ${result.moved} page${result.moved === 1 ? '' : 's'}.`,
+            );
+          },
+        },
+      ];
     },
-    [
-      placesOpen,
-      pagesOpen,
-      setPlacesOpen,
-      setPagesOpen,
-      layout,
-      instanceId,
-      toggleSidebar,
-      closeView,
-    ],
+    [clipboard, pages, openPage, newPage, run, workspace, currentPage],
+  );
+
+  const openMenu = useCallback(
+    (entry: Entry, event: React.MouseEvent | React.PointerEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      popover.open({
+        label: `Actions for ${entryLabel(entry)}`,
+        role: 'menu',
+        className: 'popover-menu',
+        anchor: anchorPoint(event.clientX, event.clientY),
+        render: ({ close }) => <PopoverMenu entries={menuFor(entry)} close={close} />,
+      });
+    },
+    [popover, menuFor],
   );
 
   /**
-   * Dragging the seam.
+   * Dragging a row.
    *
-   * The height is measured from the DOM at drag start rather than read from
-   * state, because until the first drag there is no number to read — the top
-   * half is as tall as its contents. Written to settings once, on release: a
-   * `settings.set` reaches `localStorage`, and a pointermove does not need to.
+   * Two destinations from one gesture, decided by where it is released: inside
+   * the navigator it is a *move* onto a folder, and anywhere in the workbench it
+   * is an *open* — as a tab, a split, a rail or a window, through exactly the
+   * same drop targets a tab drag uses. The threshold is what lets the same
+   * press still be the click that opens the page.
    */
-  const startSeamDrag = useCallback(
-    (event: React.PointerEvent) => {
-      const host = halvesRef.current;
-      const places = placesRef.current;
-      if (!host || !places) return;
-      event.preventDefault();
+  const dropFolder = useRef<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
 
-      const before = placesHeight;
-      const start = places.getBoundingClientRect().height;
-      const total = host.getBoundingClientRect().height;
-      let last = start;
+  const beginRowDrag = useCallback(
+    (entry: Entry, event: React.PointerEvent) => {
+      if (event.button !== 0) return;
+      dropFolder.current = null;
+      setDropTarget(null);
 
-      startPointerDrag(event, {
-        onMove: (_native, delta) => {
-          const most = Math.max(MIN_HALF, total - MIN_HALF);
-          last = Math.round(Math.min(Math.max(start + delta.dy, MIN_HALF), most));
-          setPlacesHeight(last);
-        },
-        onEnd: (_native, _delta, cancelled) => {
-          if (cancelled) {
-            setPlacesHeight(before);
-            return;
+      startDrag(event, { kind: 'page', page: entry.path }, {
+        threshold: DRAG_THRESHOLD,
+        label: entryLabel(entry),
+        onMove: () => {
+          // Hit-tested from the DOM on every move rather than from rectangles
+          // measured at drag start: the row list scrolls, and `closest` walking
+          // out to the panel itself is what makes the empty space below the
+          // rows mean "the root of the space".
+          const under = document.elementFromPoint(lastPointer.x, lastPointer.y);
+          const over = under?.closest<HTMLElement>('[data-nav-folder]');
+          const folder = over ? (over.dataset.navFolder ?? '') : null;
+          if (folder !== dropFolder.current) {
+            dropFolder.current = folder;
+            setDropTarget(folder);
           }
-          workspace.settings.set('nav.placesHeight', last);
+        },
+        onCancel: () => {
+          dropFolder.current = null;
+          setDropTarget(null);
         },
       });
     },
-    [placesHeight, workspace],
+    [startDrag],
   );
 
-  /** Back to sharing the panel: the top half returns to the height of its rows. */
-  const resetSeam = useCallback(() => {
-    setPlacesHeight(null);
-    workspace.settings.set('nav.placesHeight', null);
-  }, [workspace]);
+  /**
+   * The pointer, for the folder hit test above.
+   *
+   * `startDrag`'s `onMove` reports a delta rather than a position, because that
+   * is what a window drag needs. Rather than widen that contract for one
+   * caller, the position is picked up from the window — this listener is only
+   * alive while something is being dragged.
+   */
+  const lastPointer = useRef({ x: 0, y: 0 }).current;
+  useEffect(() => {
+    if (!drag) return;
+    const onMove = (event: PointerEvent) => {
+      lastPointer.x = event.clientX;
+      lastPointer.y = event.clientY;
+    };
+    window.addEventListener('pointermove', onMove);
+    return () => window.removeEventListener('pointermove', onMove);
+  }, [drag, lastPointer]);
+
+  // A drop inside the navigator moves; the workbench handles everything else.
+  // Watching the session end rather than owning the pointer release is what
+  // keeps the two from both acting on the same drop.
+  const wasDragging = useRef<{ page: string } | null>(null);
+  useEffect(() => {
+    if (drag?.payload.kind === 'page') {
+      wasDragging.current = { page: drag.payload.page };
+      return;
+    }
+    const finished = wasDragging.current;
+    wasDragging.current = null;
+    const folder = dropFolder.current;
+    dropFolder.current = null;
+    setDropTarget(null);
+
+    if (!finished || folder === null) return;
+    const entry: Entry = pages.some((page) => page.name === finished.page)
+      ? { kind: 'page', path: finished.page }
+      : { kind: 'folder', path: finished.page };
+    if (pageFolder(finished.page) === folder) return;
+
+    void run(
+      (context) => moveEntry(context, entry, folder),
+      (result) => `Moved to ${result.destination}.`,
+    );
+  }, [drag, pages, run]);
+
+  const rowActions = useCallback(
+    (node: { kind: 'page' | 'folder'; path: string }): RowActions => {
+      const entry: Entry = { kind: node.kind, path: node.path };
+      return {
+        onDragStart: (event) => beginRowDrag(entry, event),
+        onMenu: (event) => openMenu(entry, event),
+        cut:
+          clipboard?.mode === 'cut' &&
+          clipboard.entries.some((held) => held.path === node.path),
+        dropping: node.kind === 'folder' && dropTarget === node.path,
+        // A drop on a page means "into the folder it is in", which is what
+        // makes the gesture work in the flat list and in search results too.
+        dropPath: node.kind === 'folder' ? node.path : pageFolder(node.path),
+      };
+    },
+    [beginRowDrag, openMenu, clipboard, dropTarget],
+  );
+
+  // -- render ---------------------------------------------------------------
 
   const filtered = useMemo(() => filterPages(pages, query), [pages, query]);
   const tree = useMemo(() => buildTree(filtered, folders, sort), [filtered, folders, sort]);
   const searching = query.trim().length > 0;
+  // A page already shown for matching its name doesn't need a second row for
+  // also matching its contents.
+  const filteredNames = useMemo(() => new Set(filtered.map((page) => page.name)), [filtered]);
 
-  const journal = useMemo(
-    () =>
-      pages
-        .filter((page) => page.name.startsWith('journal/'))
-        .sort((a, b) => b.name.localeCompare(a.name))
-        .slice(0, 5),
-    [pages],
-  );
+  // The "Places" link is the way back when it isn't on screen. When the two
+  // share a rail they now stack rather than tab — see `SidebarStack` in
+  // `Workbench.tsx` — so Places is already visible above this, and a link to
+  // it would just point at something you're already looking at.
+  const placesVisible = useMemo(() => {
+    const home = locate(layout, instanceId);
+    if (home?.surface !== 'sidebar') return false;
+    return layout.sidebars[home.side].views.some((view) => view.type === PLACES_VIEW);
+  }, [layout, instanceId]);
 
-  const recent = useRecentPages(narrow ? 3 : 5);
-
-  // Both closed cannot be reached through `toggleHalf`, but hand-edited storage
-  // could say so, and a rail with nothing in it has no way back. Read as open.
-  const bothClosed = !placesOpen && !pagesOpen;
-  const showPlaces = placesOpen || bothClosed;
-  const showPages = pagesOpen || bothClosed;
-  const split = showPlaces && showPages;
-
-  // The short sections keep their room while you search, because the halves are
-  // now sized against each other: a list that empties itself as you type would
-  // drag the seam around under the pointer. On a phone there is one scroller and
-  // no seam, so there the results still take the space back.
-  const shortcuts = !(narrow && searching);
-
-  const places = (
-    <>
-      <Section id="views" title="Views" defaultOpen>
-        {VIRTUAL_INDEX.map((view) => (
-          <PageRow
-            key={view.name}
-            label={view.title}
-            icon={view.icon}
-            current={currentPage === view.name}
-            onOpen={(event) => open(view.name, event)}
-          />
-        ))}
-      </Section>
-
-      {recent.length > 0 && shortcuts && (
-        <Section id="recent" title="Recent" defaultOpen>
-          {recent.map((page) => (
-            <PageRow
-              key={page}
-              label={pageBasename(page)}
-              detail={undefined}
-              icon={<HistoryIcon />}
-              current={currentPage === page}
-              title={page}
-              onOpen={(event) => open(page, event)}
-            />
-          ))}
-        </Section>
-      )}
-
-      {shortcuts && (
-        <Section
-          id="journal"
-          title="Journal"
-          defaultOpen={!narrow}
-          action={
-            <button
-              className="nav-section-action"
-              title="Open today"
-              aria-label="Open today's page"
-              onClick={(event) => open(dailyPageName(), event)}
-            >
-              <PlusIcon />
-            </button>
-          }
-        >
-          {journal.length === 0 ? (
-            <p className="nav-empty">Nothing captured yet.</p>
-          ) : (
-            journal.map((page) => (
-              <PageRow
-                key={page.name}
-                label={journalLabel(page.name)}
-                current={currentPage === page.name}
-                title={page.name}
-                onOpen={(event) => open(page.name, event)}
-              />
-            ))
-          )}
-        </Section>
-      )}
-    </>
-  );
-
-  const browserActions = (
+  const actions = (
     <div className="nav-modes" role="group" aria-label="Pages">
       {!narrow && (
         <>
@@ -377,6 +546,14 @@ export function Navigator({ instanceId }: { instanceId: string }) {
       )}
       <button
         className="nav-section-action"
+        title="Upload files into files/"
+        aria-label="Upload files"
+        onClick={() => void upload()}
+      >
+        <UploadIcon />
+      </button>
+      <button
+        className="nav-section-action"
         title="New folder"
         aria-label="New folder"
         onClick={() => void newFolder()}
@@ -398,13 +575,19 @@ export function Navigator({ instanceId }: { instanceId: string }) {
   // the mode entirely and shows the matches.
   const browser =
     searching || effectiveMode === 'list' ? (
-      <ListMode pages={filtered} currentPage={currentPage} onOpen={open} />
+      <ListMode
+        pages={filtered}
+        currentPage={currentPage}
+        onOpen={open}
+        rowActions={rowActions}
+      />
     ) : effectiveMode === 'columns' ? (
       <ColumnsMode
         root={tree}
         currentPage={currentPage}
         onOpen={open}
         onAddPage={(folder) => void newPage(folder)}
+        rowActions={rowActions}
       />
     ) : (
       <TreeMode
@@ -412,132 +595,101 @@ export function Navigator({ instanceId }: { instanceId: string }) {
         currentPage={currentPage}
         onOpen={open}
         onAddPage={(folder) => void newPage(folder)}
+        rowActions={rowActions}
         expanded={expanded}
         onToggle={toggleFolder}
       />
     );
 
-  const search = (
-    <div className="nav-search">
-      <input
-        className="nav-search-input"
-        value={query}
-        placeholder="Find a page"
-        aria-label="Find a page"
-        onChange={(event) => setQuery(event.target.value)}
-      />
-    </div>
-  );
-
-  const pagesTitle = searching ? `Results (${filtered.length})` : 'Pages';
-
-  // The drawer is one scroll, top to bottom. Halves you can close and a seam you
-  // can drag are arrangements, and a drawer is not somewhere you arrange things.
-  if (narrow) {
-    return (
-      <nav className="navigator" ref={hostRef} aria-label="Navigator">
-        {search}
-        <div className="nav-scroll">
-          {places}
-          <Section id="pages" title={pagesTitle} defaultOpen grow action={browserActions}>
-            {browser}
-          </Section>
-        </div>
-      </nav>
-    );
-  }
-
   return (
-    <nav className="navigator" ref={hostRef} aria-label="Navigator">
-      <div className="nav-halves" data-split={split || undefined} ref={halvesRef}>
-        <NavHalf
-          id="places"
-          title="Places"
-          open={showPlaces}
-          onToggle={() => toggleHalf('places')}
-          ref={placesRef}
-          // Only while both are showing: a lone half takes the whole rail, and
-          // a remembered height would hold it short for no reason.
-          style={split && placesHeight !== null ? { height: `${placesHeight}px` } : undefined}
-        >
-          {places}
-        </NavHalf>
-
-        {/* The seam, and the only thing between the two halves. */}
-        {split && (
-          <div
-            className="nav-seam"
-            role="separator"
-            aria-orientation="horizontal"
-            aria-label="Resize the navigator halves"
-            title="Drag to resize; double-click to even it out"
-            onPointerDown={startSeamDrag}
-            onDoubleClick={resetSeam}
-          />
+    <nav
+      className="navigator"
+      data-panel="pages"
+      ref={hostRef}
+      aria-label="Navigator"
+      // Dropping onto the empty space in the panel means the root of the space.
+      data-nav-folder=""
+      data-nav-drop=""
+      // Right-clicking the panel itself, away from any row, acts on the root —
+      // which is how you paste something into the top level.
+      onContextMenu={(event) => {
+        if (event.defaultPrevented) return;
+        openMenu({ kind: 'folder', path: '' }, event);
+      }}
+    >
+      {/*
+        The search field belongs to this panel and sits at the top of it.
+        Results appear in the browser directly underneath, which is the only
+        arrangement in which the field explains what it just did.
+      */}
+      <div className="nav-search">
+        <span className="nav-search-icon">
+          <SearchIcon />
+        </span>
+        <input
+          className="nav-search-input"
+          value={query}
+          placeholder="Find a page"
+          aria-label="Find a page"
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && query) {
+              event.stopPropagation();
+              setQuery('');
+            }
+          }}
+        />
+        {searching && (
+          <button
+            className="nav-search-clear"
+            aria-label="Clear the search"
+            title="Clear"
+            onClick={() => setQuery('')}
+          >
+            ×
+          </button>
         )}
-
-        <NavHalf
-          id="pages"
-          title={pagesTitle}
-          open={showPages}
-          onToggle={() => toggleHalf('pages')}
-          action={browserActions}
-        >
-          {search}
-          <div className="nav-browser">{browser}</div>
-        </NavHalf>
       </div>
+
+      <div className="nav-head">
+        <span className="nav-head-title">
+          {searching ? `${filtered.length} result${filtered.length === 1 ? '' : 's'}` : 'Pages'}
+        </span>
+        {actions}
+      </div>
+
+      <div className="nav-browser">
+        {browser}
+        {searching && (
+          <ContentMatches hits={contentHits} exclude={filteredNames} onOpen={openContentHit} />
+        )}
+      </div>
+
+      {/* Places is a panel of its own now, so there has to be a way back to it
+          from here — otherwise splitting them off hides the journal behind a
+          command nobody knows to run.
+
+          There used to be a "Hide" button here too. It closed the rail when
+          the navigator was its only occupant, but stacked with Places — its
+          default arrangement — that same click called `closeView` instead,
+          which does not hide the navigator, it removes it: reachable again
+          only through a command, not through anything on screen. A button
+          whose job is "put this away for later" must not have a second,
+          unlabelled meaning of "get rid of this". Collapsing it (a click on
+          its own title in classic mode, or the seam above it everywhere
+          else) is the reversible version of the same idea. */}
+      {!narrow && !placesVisible && (
+        <div className="nav-foot">
+          <button
+            className="nav-foot-link"
+            onClick={openPlaces}
+            title="Views, recent pages and the journal"
+          >
+            Places
+          </button>
+        </div>
+      )}
     </nav>
-  );
-}
-
-// ---------------------------------------------------------------------------
-
-/**
- * One half of the rail.
- *
- * Closed, it keeps its header and nothing else — a strip you can read the name
- * of and press to get the half back. The header carries the half's own controls
- * (the mode switcher, for the pages half), which is why the toggle is a button
- * beside them rather than the whole row.
- */
-function NavHalf({
-  id,
-  title,
-  open,
-  onToggle,
-  action,
-  children,
-  style,
-  ref,
-}: {
-  id: Half;
-  title: string;
-  open: boolean;
-  onToggle: () => void;
-  action?: ReactNode;
-  children: ReactNode;
-  style?: React.CSSProperties;
-  ref?: React.Ref<HTMLElement>;
-}) {
-  return (
-    <section className="nav-half" data-half={id} data-open={open || undefined} style={style} ref={ref}>
-      <div className="nav-half-head">
-        <button
-          className="nav-half-toggle"
-          aria-expanded={open}
-          title={`${open ? 'Hide' : 'Show'} ${id}`}
-          onClick={onToggle}
-        >
-          <span className="nav-row-twisty">
-            <ChevronIcon />
-          </span>
-          {title}
-        </button>
-        {open && action}
-      </div>
-      {open && <div className="nav-half-body">{children}</div>}
-    </section>
   );
 }
 
@@ -552,7 +704,7 @@ function ModeButton({
   value: Mode;
   label: string;
   onPick: (mode: Mode) => void;
-  children: ReactNode;
+  children: React.ReactNode;
 }) {
   return (
     <button
@@ -567,71 +719,72 @@ function ModeButton({
   );
 }
 
-function Section({
-  id,
-  title,
-  children,
-  action,
-  defaultOpen = true,
-  grow = false,
+/** A row names itself by its last segment, whatever depth it is at. */
+function entryLabel(entry: Entry): string {
+  return pageBasename(entry.path) || 'the space';
+}
+
+/**
+ * Pages that matched the query's *contents*, not its name — the filename
+ * filter above already covers the title, so a page only needs a row here if
+ * the reason it matched isn't otherwise visible.
+ *
+ * Each row shows the snippet it matched on, since "Improvements" on its own
+ * doesn't say why it's in the results the way it does for a title match.
+ */
+function ContentMatches({
+  hits,
+  exclude,
+  onOpen,
 }: {
-  id: string;
-  title: string;
-  children: ReactNode;
-  action?: ReactNode;
-  defaultOpen?: boolean;
-  grow?: boolean;
+  hits: SearchHit[];
+  exclude: ReadonlySet<string>;
+  onOpen: (hit: SearchHit, event: React.MouseEvent) => void;
 }) {
-  const [open, setOpen] = usePersisted(`nav.section.${id}`, defaultOpen);
+  // One row per page, not one per matching chunk — every row opens the same
+  // page regardless of which passage matched, so a page with four hits would
+  // otherwise be four near-identical rows in a row. `hits` already arrives
+  // best-first, so the first chunk seen per page is its best one.
+  const seen = new Set<string>();
+  const shown = hits.filter((hit) => {
+    if (exclude.has(hit.page) || seen.has(hit.page)) return false;
+    seen.add(hit.page);
+    return true;
+  });
+  if (shown.length === 0) return null;
 
   return (
-    <section className="nav-section" data-open={open || undefined} data-grow={grow || undefined}>
-      <div className="nav-section-head">
+    <div className="nav-search-hits">
+      <div className="nav-search-hits-label">In your pages</div>
+      {shown.map((hit) => (
         <button
-          className="nav-section-toggle"
-          aria-expanded={open}
-          onClick={() => setOpen(!open)}
+          key={`${hit.page}:${hit.line}`}
+          className="nav-search-hit"
+          onClick={(event) => onOpen(hit, event)}
+          title={hit.page}
         >
-          <span className="nav-row-twisty">
-            <ChevronIcon />
+          <span className="nav-search-hit-title">
+            <PageIcon />
+            {hit.page}
           </span>
-          {title}
+          <span className="nav-search-hit-snippet">
+            {hit.heading ? `${hit.heading} — ` : ''}
+            {snippetOf(hit.text)}
+          </span>
         </button>
-        {open && action}
-      </div>
-      {open && <div className="nav-section-body">{children}</div>}
-    </section>
+      ))}
+    </div>
   );
 }
 
-/** Component state that outlives the session, without a store per preference. */
-function usePersisted<T>(key: string, fallback: T): [T, (value: T) => void] {
-  const { workspace } = useApp();
-  const [value, setValue] = useState<T>(() => workspace.settings.get<T>(key, fallback));
+const SNIPPET_LENGTH = 140;
 
-  const update = useCallback(
-    (next: T) => {
-      setValue(next);
-      workspace.settings.set(key, next);
-    },
-    [workspace, key],
-  );
-
-  return [value, update];
-}
-
-/** `journal/2026-07-28` reads as a date, not as a filename. */
-function journalLabel(name: string): string {
-  const match = /^journal\/(\d{4})-(\d{2})-(\d{2})$/.exec(name);
-  if (!match) return pageBasename(name);
-
-  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  const today = new Date();
-  const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString();
-  if (sameDay(date, today)) return 'Today';
-
-  const yesterday = new Date(today.getTime() - 86_400_000);
-  if (sameDay(date, yesterday)) return 'Yesterday';
-
-  return date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+/** The chunk's opening text, trimmed to a line worth reading rather than the whole paragraph. */
+function snippetOf(text: string): string {
+  const trimmed = text.trim().replace(/\s+/g, ' ');
+  if (trimmed.length <= SNIPPET_LENGTH) return trimmed;
+  // Break on the last space before the limit, so the cut doesn't land mid-word.
+  const cut = trimmed.slice(0, SNIPPET_LENGTH);
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${cut.slice(0, lastSpace > 40 ? lastSpace : SNIPPET_LENGTH)}…`;
 }

@@ -205,6 +205,23 @@ button {
   color: var(--accent);
 }
 
+/* The proactive scan's one allowed surface — a quiet mark on "Ask Spark"
+   itself, never a message in a conversation. See `proactive.ts`. */
+.icon-button[data-proactive] {
+  position: relative;
+}
+
+.icon-button[data-proactive]::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
 .icon-button svg {
   width: 17px;
   height: 17px;
@@ -324,31 +341,66 @@ button {
  * the controls are in the strip and the corner is the view's own again.
  */
 .tile:has(> .tile-actions) .tile-body {
+  /* Nothing reserved at rest. The reservation used to be permanent, which meant
+     every panel that reads it carried a hole in its header the whole time for a
+     row of buttons that is visible almost none of it — the "lots of whitespace
+     when nothing is using it" this replaces. */
+  --corner-actions: 0.5rem;
+  transition: none;
+}
+
+/* Room is made as you approach, from the same hover that reveals the overlay,
+   so the header's own buttons slide aside rather than being sat on. */
+.tile:has(> .tile-actions:hover) .tile-body,
+.tile:has(> .tile-actions:focus-within) .tile-body,
+body.is-dragging .tile:has(> .tile-actions) .tile-body {
   --corner-actions: 7rem;
 }
 
 /*
  * A single-view tile has no tab strip, so its controls live here: floated over
- * the top-right corner, revealed on hover, and gone the moment a second view
- * arrives and the real strip takes over.
+ * the top-right corner and gone the moment a second view arrives and the real
+ * strip takes over.
+ *
+ * **Found by approaching them, not by being in the tile.** They used to appear
+ * whenever the pointer was anywhere in the tile, which is nearly always — so a
+ * blank-editor-first app had a row of buttons on screen the entire time you
+ * were writing. The reveal is now the cluster's *own* hover, and the cluster is
+ * bigger than its buttons: `--reach` is transparent padding around them, so the
+ * controls are found by moving toward the corner rather than by hitting a
+ * 24-pixel target from cold. The padding sits in the tile's top-right, which is
+ * the editor's right margin at every reading width the app offers.
  */
 .tile-actions {
+  --reach: 2rem;
   position: absolute;
-  top: 0.3rem;
-  right: 0.4rem;
+  top: 0;
+  right: 0;
   z-index: 4;
   display: flex;
   gap: 0.1rem;
-  padding: 0.1rem;
+  padding: 0.35rem 0.4rem 0.35rem var(--reach);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: blur(6px);
   opacity: 0;
   transition: opacity var(--fast) var(--ease);
 }
 
-.tile:hover .tile-actions,
-.tile:focus-within .tile-actions {
+.tile-actions:hover,
+.tile-actions:focus-within {
+  opacity: 1;
+}
+
+/* Backing only once it is showing: a blurred plate under invisible buttons is
+   a smudge over the first line of the note. */
+.tile-actions:hover,
+.tile-actions:focus-within {
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+/* While something is being dragged, every place it could land should be
+   legible — including the grip it might be dropped back onto. */
+body.is-dragging .tile-actions {
   opacity: 1;
 }
 
@@ -392,6 +444,7 @@ button {
 }
 
 .page-view {
+  position: relative;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -448,6 +501,40 @@ button {
   display: none;
 }
 
+/*
+ * The scroll buttons either side of the strip — drawn only while
+ * `TabStrip.tsx` measures actual overflow, never as a permanent fixture. A
+ * button that does nothing when there is nothing to scroll to is worse than
+ * no button, which is also why there is no fade mask here: a mask says
+ * "there's more" whether or not that's true, and these already only exist
+ * when it is.
+ */
+.tabs-scroll-btn {
+  flex: none;
+  width: 22px;
+  border-radius: 0;
+  color: var(--text-faint);
+  background: var(--surface-sunken);
+}
+
+.tabs-scroll-btn[data-side='left'] {
+  border-right: 1px solid var(--rule);
+}
+
+.tabs-scroll-btn[data-side='right'] {
+  border-left: 1px solid var(--rule);
+}
+
+.tabs-scroll-btn:hover {
+  color: var(--text);
+  background: var(--surface);
+}
+
+.tabs-scroll-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
 .tab {
   display: flex;
   align-items: center;
@@ -479,6 +566,12 @@ button {
 .tab-title {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* A preview tab — see `GroupNode.preview` — reads as provisional rather than
+   as a document you committed to keeping open. */
+.tab[data-preview='true'] .tab-title {
+  font-style: italic;
 }
 
 .tab-close {
@@ -515,13 +608,19 @@ button {
   flex: none;
   display: flex;
   align-items: center;
-  padding: 0 0.2rem;
+  /* Transparent reach on the left, so the buttons are found by moving along
+     the strip toward them rather than by hitting them exactly. */
+  padding: 0 0.2rem 0 1.5rem;
   opacity: 0;
   transition: opacity var(--fast) var(--ease);
 }
 
-.tabs:hover .tabs-actions,
-.tile[data-focused='true'] .tabs-actions {
+/* Same rule as the tile's corner: near them, not merely focused. The strip
+   itself is chrome you asked for by opening a second tab; the buttons on the
+   end of it are not. */
+.tabs-actions:hover,
+.tabs-actions:focus-within,
+body.is-dragging .tabs-actions {
   opacity: 1;
 }
 
@@ -563,8 +662,13 @@ button {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  /* Room for `.sidebar-actions`, which floats over this corner — see
-     `--corner-actions` where the panel headers read it. */
+  /* See the tile rule above: nothing reserved until the overlay is actually
+     coming out, so a rail's header is not permanently short of its right edge. */
+  --corner-actions: 0.5rem;
+}
+
+.sidebar:has(.sidebar-actions:hover) .sidebar-body,
+.sidebar:has(.sidebar-actions:focus-within) .sidebar-body {
   --corner-actions: 3.6rem;
 }
 
@@ -582,6 +686,15 @@ button {
   color: var(--text-faint);
 }
 
+/* The drawer's own tab row is the Pages/Places switcher on a phone — there is
+   no rail to see it in otherwise (see `MobileDrawer`) — so it reads at the
+   same small size as a desktop rail's tabs despite being the primary way to
+   switch panels there. Bigger here only; the desktop rail is untouched. */
+[data-drawer='true'] .sidebar-tab {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.8125rem;
+}
+
 .sidebar-tab[aria-selected='true'] {
   background: var(--surface);
   color: var(--text);
@@ -596,16 +709,18 @@ button {
  */
 .sidebar-actions {
   position: absolute;
-  top: 0.3rem;
-  right: 0.5rem;
+  top: 0;
+  right: 0;
   display: flex;
   gap: 0.1rem;
+  padding: 0.3rem 0.5rem 0.4rem 1.75rem;
   opacity: 0;
   transition: opacity var(--fast) var(--ease);
 }
 
-.sidebar:hover .sidebar-actions,
-.sidebar:focus-within .sidebar-actions {
+.sidebar-actions:hover,
+.sidebar-actions:focus-within,
+body.is-dragging .sidebar-actions {
   opacity: 1;
 }
 
@@ -618,6 +733,104 @@ button {
 .sidebar-actions .icon-button svg {
   width: 13px;
   height: 13px;
+}
+
+/*
+ * The navigator and Places, stacked — see `SidebarStack` in `Workbench.tsx`.
+ * Two panels in one column, each with its own slim header standing in for
+ * the tab strip this replaces: the whole header is the drag handle, the way
+ * the tab it used to be was.
+ */
+.sidebar-stack {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-stack-item {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Places sits above the navigator with a rule under it; height itself is now
+   inline (`Workbench.tsx`'s `SidebarStack`) — dragged by the seam below,
+   rather than a fixed CSS cap, now that the seam is back. */
+.sidebar-stack-item[data-view='places'] {
+  border-bottom: 1px solid var(--rule);
+}
+
+.sidebar-stack-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.3rem 0.35rem 0.3rem 0.6rem;
+  cursor: grab;
+}
+
+/* Classic mode has nowhere to drag a panel to, so the same press collapses
+   it instead — see `SidebarStack`. A pointing hand says "this does something
+   on click" the way a grab hand says "this drags". `data-layout` is set on
+   the root element by `applyAppearance`, not on `.workbench` itself. */
+[data-layout='classic'] .sidebar-stack-head {
+  cursor: pointer;
+}
+
+.sidebar-stack-item[data-collapsed] .sidebar-stack-head {
+  border-bottom: 1px solid var(--rule);
+}
+
+.sidebar-stack-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-stack-head .icon-button {
+  flex: none;
+  width: 22px;
+  height: 22px;
+}
+
+.sidebar-stack-head .icon-button svg {
+  width: 13px;
+  height: 13px;
+}
+
+.sidebar-stack-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* The seam between Places and the navigator. Thin at rest, thicker on hover —
+   the same "reach without being seen" the rest of the workbench's drag
+   handles use. */
+.sidebar-stack-seam {
+  flex: none;
+  height: 5px;
+  margin: -2px 0;
+  position: relative;
+  z-index: 1;
+  cursor: row-resize;
+}
+
+.sidebar-stack-seam:hover::after,
+.sidebar-stack-seam:active::after {
+  content: '';
+  position: absolute;
+  inset: 2px 0;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0.4;
 }
 
 /* The grab strip sits half outside the sidebar so it is reachable either way. */
@@ -734,6 +947,35 @@ button {
   white-space: nowrap;
 }
 
+/*
+ * A window's controls are chrome too.
+ *
+ * Shown when the pointer is on the window, not permanently: a floating note is
+ * still a note, and three buttons riding above it at all times is the workbench
+ * announcing itself over the thing you opened it to read. A modal is the
+ * exception — its only control is Close, and a modal you cannot see the way out
+ * of is a trap.
+ */
+.window:not([data-modal='true']) .window-actions {
+  opacity: 0;
+  transition: opacity var(--fast) var(--ease);
+}
+
+/*
+ * The title bar, not the window.
+ *
+ * Revealing on the whole window would mean the buttons are showing the entire
+ * time you are reading what is in it, which is the state this is meant to get
+ * out of. The bar is a thin strip you cross deliberately on the way to them —
+ * and `:focus-within` keeps them reachable by keyboard, where there is no
+ * pointer to be near anything.
+ */
+.window-bar:hover .window-actions,
+.window-actions:focus-within,
+body.is-dragging .window-actions {
+  opacity: 1;
+}
+
 .window-actions {
   flex: none;
   display: flex;
@@ -820,133 +1062,168 @@ body.is-dragging .cm-editor {
 }
 
 /*
- * The two halves.
+ * The panel header.
  *
- * One panel with a seam in it, not two panels: the top half is sized by its own
- * contents until the seam is dragged, so the rail opens looking like the single
- * list it used to be. A closed half keeps its header — that strip is the only
- * way back to it — and where there is no seam between two halves, the rule that
- * would have been under the seam takes its place.
+ * Two panels now — the navigator and Places — where there used to be one with a
+ * draggable seam through it. The seam is gone with them: it was a second, worse
+ * splitter inside an app whose whole workbench is about splitting things, and
+ * two panels can be arranged by every mechanism the workbench already has.
  */
-.nav-halves {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.nav-half {
-  flex: none;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-/* Alone, an open half takes the rail. Beside another it is content-sized (or the
-   height the seam was dragged to), and the lower half takes what is left. */
-.nav-half[data-open='true'] {
-  flex: 1 1 auto;
-}
-
-.nav-halves[data-split='true'] > .nav-half[data-half='places'] {
-  flex: 0 1 auto;
-  /* Half the rail is the most the short lists may claim; past that the browser
-     is the one that stops being usable. */
-  max-height: 55%;
-}
-
-.nav-half + .nav-half {
-  border-top: 1px solid var(--rule);
-}
-
-.nav-half-head {
+.nav-head {
   flex: none;
   display: flex;
   align-items: center;
   gap: 0.25rem;
-  padding: 0.4rem 0.5rem 0.25rem;
-}
-
-/* The topmost header yields the corner to `.sidebar-actions`, which floats over
-   it — see `--corner-actions`. */
-.nav-half:first-child > .nav-half-head {
+  /* The corner is yielded to `.sidebar-actions`, which floats over it — see
+     `--corner-actions`. */
+  padding: 0.15rem 0.5rem 0.3rem;
   padding-right: var(--corner-actions, 0.5rem);
 }
 
-/*
- * A half's name is sentence case and a shade stronger than a section's uppercase
- * label, so two levels of collapsible heading read as two levels rather than as
- * a column of headings.
- */
-.nav-half-toggle {
+.nav-head-title {
   flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  text-align: left;
-  font-size: 0.75rem;
+  min-width: 0;
+  font-size: 0.8125rem;
   font-weight: 500;
   color: var(--text-muted);
-  padding: 0.1rem 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.nav-half-toggle:hover {
-  color: var(--text);
-}
-
-.nav-half-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
+/*
+ * The way back to the other panel.
+ *
+ * Splitting Places out of the navigator would otherwise hide the journal behind
+ * a command nobody knows to run, and a rail tab is only visible once both are
+ * in the same rail — which they are by default, and need not stay.
+ */
+.nav-foot {
+  flex: none;
   display: flex;
-  flex-direction: column;
-  padding-bottom: 0.35rem;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.6rem;
+  border-top: 1px solid var(--rule);
 }
 
-/* The seam is a rule you can drag, with a grab strip wider than the rule so it
-   is catchable, and no gap either side of it — the halves stay connected. */
-.nav-seam {
+.nav-foot-link {
+  font-size: 0.6875rem;
+  color: var(--text-faintest);
+  padding: 0.15rem 0.3rem;
+  border-radius: var(--radius-sm);
+}
+
+.nav-foot-link:hover {
+  color: var(--text-muted);
+  background: var(--surface-sunken);
+}
+
+/*
+ * Search, at the top of the panel it filters.
+ *
+ * Above the browser and below nothing: results appear directly underneath it,
+ * which is the only arrangement in which the field explains what it just did.
+ */
+.nav-search {
   position: relative;
   flex: none;
-  height: 1px;
-  background: var(--rule);
-  cursor: row-resize;
-}
-
-.nav-seam::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: -4px;
-  bottom: -4px;
-}
-
-.nav-seam:hover {
-  background: var(--accent-faint);
-}
-
-.nav-search {
-  flex: none;
+  display: flex;
+  align-items: center;
   padding: 0.5rem 0.5rem 0.35rem;
+  padding-right: var(--corner-actions, 0.5rem);
 }
 
-/* Under a half's header the search field needs no top padding of its own. */
-.nav-half-body > .nav-search {
-  padding-top: 0.15rem;
+.nav-search-icon {
+  position: absolute;
+  left: 1.05rem;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  color: var(--text-faintest);
 }
 
-/* The browser scrolls inside the half; the search field above it does not move. */
+.nav-search-icon svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The browser scrolls; the search field above it does not move. */
 .nav-browser {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 0 0.35rem;
+  padding: 0 0.35rem 0.4rem;
+}
+
+/* Content matches — a page that matched the query's body rather than its
+   name, so unlike `.nav-row` it carries a second line: the snippet is the
+   whole reason the row is there. */
+.nav-search-hits {
+  margin-top: 0.4rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--rule);
+}
+
+.nav-search-hits-label {
+  padding: 0.15rem 0.4rem 0.3rem;
+  font-size: 0.6875rem;
+  color: var(--text-faintest);
+}
+
+.nav-search-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.3rem 0.4rem;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+}
+
+.nav-search-hit:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.nav-search-hit-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+  color: inherit;
+}
+
+.nav-search-hit-title svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  stroke: var(--text-faintest);
+  fill: none;
+  stroke-width: 2;
+}
+
+.nav-search-hit-snippet {
+  padding-left: calc(13px + 0.4rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  color: var(--text-faint);
 }
 
 .nav-search-input {
   width: 100%;
-  padding: 0.4rem 0.6rem;
+  padding: 0.4rem 0.6rem 0.4rem 1.85rem;
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   background: var(--surface);
@@ -956,6 +1233,24 @@ body.is-dragging .cm-editor {
 
 .nav-search-input:focus {
   border-color: var(--accent-faint);
+}
+
+.nav-search-clear {
+  position: absolute;
+  right: calc(var(--corner-actions, 0.5rem) + 0.25rem);
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 0.9rem;
+  line-height: 1;
+  color: var(--text-faintest);
+}
+
+.nav-search-clear:hover {
+  color: var(--text);
+  background: var(--surface-sunken);
 }
 
 .nav-scroll {
@@ -1226,8 +1521,7 @@ body.is-dragging .cm-editor {
 }
 
 .nav-row[data-expanded='true'] .nav-row-twisty svg,
-.nav-section[data-open='true'] > .nav-section-head .nav-row-twisty svg,
-.nav-half[data-open='true'] > .nav-half-head .nav-row-twisty svg {
+.nav-section[data-open='true'] > .nav-section-head .nav-row-twisty svg {
   transform: rotate(90deg);
 }
 
@@ -1287,6 +1581,17 @@ body.is-dragging .cm-editor {
 .statusbar button:hover {
   color: var(--text-muted);
   background: var(--surface-sunken);
+}
+
+/*
+ * The word count is the one thing in the bar you can press, so it is the one
+ * thing that looks pressable — and when it is describing a page you are no
+ * longer looking at, it says so by fading rather than by disappearing.
+ */
+.statusbar-count[data-stale='true'] {
+  color: var(--text-faintest);
+  opacity: 0.6;
+  font-style: italic;
 }
 
 .statusbar [data-state='error'] {
@@ -1385,7 +1690,10 @@ body.is-dragging .cm-editor {
   resize: none;
   background: transparent;
   font-family: var(--font-editor);
-  font-size: 1.25rem;
+  /* The editor's own reading size: what is typed here is destined for the
+     journal, and a braindump that lands in the day's page should already look
+     the size the notes read at. */
+  font-size: var(--editor-font-size);
   line-height: 1.5;
   padding: 1rem 0 0;
   color: var(--text);
@@ -1443,8 +1751,22 @@ body.is-dragging .cm-editor {
 }
 
 .mode-glyph {
-  font-size: 0.95em;
-  line-height: 1;
+  display: inline-flex;
+  color: var(--text-faint);
+}
+
+.mode[aria-pressed='true'] .mode-glyph {
+  color: var(--accent);
+}
+
+.mode-glyph svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .mode-count {
@@ -1495,6 +1817,21 @@ body.is-dragging .cm-editor {
 
 .button[data-variant='ghost']:hover:not(:disabled) {
   background: var(--surface-sunken);
+}
+
+/* A quieter button for a header that is mostly a place to read. The memory
+   page's "Consolidate now" is a maintenance action, not the point of the
+   screen — it shrinks to the size of the chrome around it instead of
+   competing with the headings. */
+.button-sm {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.75rem;
+  gap: 0.3rem;
+}
+
+.button-sm svg {
+  width: 13px;
+  height: 13px;
 }
 
 .mic {
@@ -1600,6 +1937,14 @@ body.is-dragging .cm-editor {
 .md-key:active {
   background: var(--accent-soft);
   color: var(--text);
+}
+
+.md-key svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.75;
 }
 
 .md-key[data-wide='true'] {
@@ -1902,6 +2247,16 @@ body.is-dragging .cm-editor {
   color: var(--danger);
 }
 
+/* A subtask nests under its parent by the same indentation it has in the
+ * source file, so a checklist with sub-items reads as one shape instead of a
+ * flat list that happens to be in the right order. */
+.task[data-depth='1'] { margin-left: 1.4rem; }
+.task[data-depth='2'] { margin-left: 2.8rem; }
+.task[data-depth='3'] { margin-left: 4.2rem; }
+.task[data-depth='4'] { margin-left: 5.6rem; }
+.task[data-depth='5'] { margin-left: 7rem; }
+.task[data-depth='6'] { margin-left: 8.4rem; }
+
 /* ---------------------------------------------------------------------------
  * Settings
  *
@@ -2102,6 +2457,25 @@ body.is-dragging .cm-editor {
   background: var(--surface-sunken);
   border-radius: 4px;
   padding: 0.05rem 0.35rem;
+}
+
+/* Uploads list: name/size/date on the left, one delete button on the right —
+   the only row shape in `.settings-list` that needs a trailing action. */
+.settings-files li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.settings-files li > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-files .settings-list-main strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-keys {
@@ -2410,22 +2784,21 @@ body.is-dragging .cm-editor {
   gap: 0.35rem;
   padding: 0;
   text-align: left;
-  border-radius: var(--radius);
-  /* The selected ring is drawn outside the card, so nothing inside it moves. */
-  outline: 2px solid transparent;
-  outline-offset: 2px;
-  transition: outline-color var(--fast) var(--ease);
+  /* Rows stay level even where one description runs a line longer. */
+  align-self: start;
 }
 
 .theme-card:hover .theme-card-page {
   border-color: var(--rule-strong);
 }
 
-.theme-card[aria-checked='true'] {
-  outline-color: var(--accent);
-}
-
-/* The miniature. Everything in here is in the theme's own colours. */
+/*
+ * The miniature. Everything in here is in the theme's own colours.
+ *
+ * The selection ring goes on *this* element rather than the whole card, because
+ * this is the only part with a fixed height — a ring around the card would be as
+ * tall as the longest description in the row, and no two would line up.
+ */
 .theme-card-page {
   display: flex;
   flex-direction: column;
@@ -2437,7 +2810,17 @@ body.is-dragging .cm-editor {
   border-radius: var(--radius);
   background: var(--bg);
   color: var(--text);
-  transition: border-color var(--fast) var(--ease);
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  transition: border-color var(--fast) var(--ease), outline-color var(--fast) var(--ease);
+}
+
+.theme-card[aria-checked='true'] .theme-card-page {
+  outline-color: var(--accent);
+}
+
+.theme-card[aria-checked='true'] .theme-card-name {
+  color: var(--accent);
 }
 
 /*
@@ -2504,11 +2887,17 @@ body.is-dragging .cm-editor {
   padding: 0 0.15rem;
 }
 
+/* Two lines, clamped: the whole description is on the card's tooltip, and a
+   third line here would push the next row of miniatures out of alignment. */
 .theme-card-hint {
   font-size: 0.6875rem;
   line-height: 1.4;
   color: var(--text-faint);
   padding: 0 0.15rem 0.15rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 /* -- Type preview ---------------------------------------------------------- */
@@ -2849,12 +3238,15 @@ kbd {
  * Spark
  *
  * Two shapes, deliberately different. What you said is a bubble, because it is
- * a remark. What Spark said is a column of prose at the same measure as a note,
- * because it is an answer, and an answer squeezed into a speech bubble reads
- * like chatter.
+ * a remark. What Spark said is a full column of prose, because it is an
+ * answer, and an answer squeezed into a speech bubble reads like chatter.
+ * Both stop at the note's measure (`--editor-measure`, the same width the
+ * editor reads at) and centre themselves in whatever room the panel has:
+ * a wide chat is a column to read in, not a runway of prose.
  * ------------------------------------------------------------------------ */
 
 .spark {
+  position: relative;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -2862,32 +3254,141 @@ kbd {
 }
 
 .spark-head {
+  position: relative;
+  z-index: 6;
   flex: none;
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  /* The right edge yields to whatever floats over the corner, so the history
-     and new-conversation buttons are never underneath it. */
-  padding: 0.45rem var(--corner-actions, 0.5rem) 0.45rem 0.85rem;
-  border-bottom: 1px solid var(--rule);
+  /* No bottom rule: the header is a strip of the panel, not a divider
+     between it and the transcript. No background either: the panel's own
+     surface shows through, so the header is a row of controls on the
+     transcript rather than a shaded toolbar. */
+  padding: 0.45rem 0.85rem;
+  /* The whole bar is the drag handle now — see `beginHeaderDrag` — so it reads
+     as one, the way a window's own title bar does. */
+  cursor: grab;
 }
 
-.spark-mark {
+/* Classic mode has no window manager to drag within, so `beginHeaderDrag`
+   no-ops there — the grab cursor would lie about that. */
+.spark-head-fixed {
+  cursor: default;
+}
+
+.spark-head .icon-button {
+  flex: none;
+}
+
+/*
+ * The mark, which is also the sidebar toggle — one slot, two states plus
+ * their hovers. At rest it is the logo; hovering it swaps in the way back —
+ * the history glyph, or the close glyph while the overlay is open. The logo
+ * itself is never replaced: the open list is a state of the panel, not a
+ * reason for the mark to disappear. Both glyphs occupy the same grid cell,
+ * so nothing ever shifts.
+ */
+.spark-logo-toggle {
   display: grid;
   place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
   color: var(--accent);
+  cursor: pointer;
+  transition: background var(--fast) var(--ease);
 }
 
-.spark-mark svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.6;
-  stroke-linejoin: round;
+.spark-logo-toggle:hover {
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+
+/* Both glyphs are centred in the same grid cell, so swapping one for the
+   other never moves it a pixel — and the hover glyph is centred too, not
+   just the logo. */
+.spark-logo-toggle .spark-logo-rest,
+.spark-logo-toggle .spark-logo-hover {
+  display: grid;
+  place-items: center;
+}
+
+.spark-logo-toggle .spark-logo {
+  width: 20px;
+  height: 20px;
+}
+
+.spark-logo-toggle .spark-logo-hover {
+  display: none;
+}
+
+.spark-logo-toggle:hover .spark-logo-rest {
+  display: none;
+}
+
+.spark-logo-toggle:hover .spark-logo-hover {
+  display: grid;
+}
+
+.spark-logo-toggle .spark-logo-hover svg {
+  width: 15px;
+  height: 15px;
+}
+
+/*
+ * The window controls: the grip, split, float and close every other view
+ * gets from the workbench's corner overlay, home-grown because that overlay
+ * would cover Spark's own header. They sit in the main chat area, below the
+ * header (which keeps its + button as the top-right control), overlaid on
+ * the transcript's corner and revealed on hover — the same affordance the
+ * corner overlay is, moved down so it cannot overlap the header.
+ *
+ * `opacity` alone would still eat the clicks underneath it — the trap in
+ * AGENTS.md — so the cluster is inert (`pointer-events: none`) until it is
+ * actually shown.
+ */
+.spark-window-controls {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.4rem;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+  padding: 0.25rem 0.3rem 0.25rem 1.25rem;
+  border-radius: var(--radius-sm);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--fast) var(--ease);
+}
+
+.spark-chat:hover .spark-window-controls,
+.spark-window-controls:focus-within,
+body.is-dragging .spark-window-controls {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.spark-window-controls .icon-button {
+  width: 24px;
+  height: 24px;
+}
+
+.spark-window-controls .icon-button svg {
+  width: 14px;
+  height: 14px;
 }
 
 .spark-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.8125rem;
   color: var(--text);
 }
@@ -2911,16 +3412,218 @@ kbd {
   75% { content: '...'; }
 }
 
-.spark-history {
+/* Everything below the header: the chat column (transcript + composer) and
+   the docked overlay. Wide, the overlay *sets in* — it is an in-flow flex
+   sibling that pushes the chat aside, never covering it — and only when
+   there is no room (a narrow panel) or the view demands the whole panel
+   (the projects screen) does it fall back to covering. The overlay
+   positions against this box, so the header — whose logo slot is the
+   toggle — is never covered by it. */
+.spark-workspace {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+}
+
+/* The chat column: the transcript above, the composer below. Shrinks to
+   make room for the docked overlay; `min-width: 0` is what lets it, and
+   lets a narrow chat ellipsis instead of overflowing. `position: relative`
+   anchors the window-controls cluster to *this* column — the overlay is a
+   sibling, and a cluster anchored to the workspace would sit over the wrong
+   right edge whenever the dock is open. */
+.spark-chat {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The conversation list. Wide, it docks as a column at the left edge — the
+   header's toggle sits there, so the history opens from under it — as an
+   in-flow sibling of the chat: the dock pushes the conversation aside
+   rather than hiding it, and the seam between them is the rule the resize
+   handle sits on. The dock's width is `--spark-dock` — the number the
+   right-edge handle drags, seeded from the preference — clamped to leave
+   at least 160px of conversation beside it. The projects screen is the
+   same overlay in `data-big`: it fills the panel, because a selector with
+   a grid in it wants all the room there is. */
+.spark-overlay {
+  position: relative;
   flex: none;
-  max-height: 40%;
-  overflow-y: auto;
-  padding: 0.35rem;
+  min-width: 0;
+  z-index: 5;
+  width: min(var(--spark-dock, 420px), calc(100% - 160px));
+  display: flex;
+  flex-direction: column;
   background: var(--surface-sunken);
-  border-bottom: 1px solid var(--rule);
+  border-right: 1px solid var(--rule);
+}
+
+/* When the panel is narrow the overlay fills the whole panel — the
+   `data-narrow` attribute is what descendant components read to switch
+   their own layout between wide and narrow modes. `data-big` (the projects
+   screen) fills it too, deliberately: it is a bigger view, not a docked
+   column. Both cover the chat instead of pushing it, because there is no
+   room left to push it to. */
+.spark-overlay[data-narrow],
+.spark-overlay[data-big] {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  border-right: none;
+}
+
+/* The thin strip above the list: the back button when the projects screen is
+   showing, and the pin at the far right. New conversation and Projects no
+   longer live here — they are rows at the top of the list, where an action
+   about a chat sits with the chats. */
+.spark-overlay-toolbar {
+  flex: none;
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.4rem 0.5rem 0.3rem;
+}
+
+.spark-overlay-action {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.55rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex: none;
+}
+
+.spark-overlay-action:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.spark-overlay-action svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* Pushes the pin to the toolbar's right edge; the only flex-grow in the row. */
+.spark-overlay-toolbar-spacer {
+  flex: 1;
+}
+
+/* The pin: opening a chat closes the list unless this is pressed. Hidden when
+   the overlay fills the panel, where pinning would leave a chat you cannot
+   see behind the list that stayed up. Small and quiet — it is a preference
+   you adjust once, not a thing the strip should advertise. */
+.spark-overlay-pin {
+  align-self: center;
+  width: 22px;
+  height: 22px;
+}
+
+/* The docked column's drag handle. The press means nothing on its own, so the
+   drag threshold is zero; `is-dragging` on the body keeps it visible while
+   the pointer is elsewhere. Not drawn when the overlay fills the panel or
+   shows the projects screen — there is nothing to drag in either. */
+.spark-overlay-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -3px;
+  width: 7px;
+  cursor: col-resize;
+  touch-action: none;
+  border-radius: var(--radius-sm);
+  transition: background var(--fast) var(--ease);
+}
+
+.spark-overlay-resize:hover,
+body.is-dragging .spark-overlay-resize {
+  background: var(--accent-soft);
+}
+
+.spark-overlay-chats {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* New conversation and Projects: rows at the top of the list, styled almost
+   like chat rows so the list reads as one surface with two actions on it —
+   the thing you can do is where the things it acts on are. */
+.spark-overlay-list-actions {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  padding: 0.1rem 0.35rem 0.15rem;
+}
+
+.spark-list-action {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  text-align: left;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.spark-list-action:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.spark-list-action svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+}
+
+.spark-overlay-search {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.4rem 0.5rem 0.3rem;
+}
+
+/* The sort selector: Recent / A–Z / By project, over the same three-option
+   control the rest of the app uses. Sits between the search and the rows
+   because it changes what the rows are, which is what the search does not. */
+.spark-overlay-sort {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.15rem 0.5rem 0.4rem;
+}
+
+.spark-overlay-sort-label {
+  font-size: 0.6875rem;
+  color: var(--text-faintest);
+}
+
+.spark-overlay-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.1rem 0.35rem 0.5rem;
 }
 
 .spark-history-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 0.25rem;
@@ -2935,56 +3638,630 @@ kbd {
   background: var(--accent-soft);
 }
 
+.spark-history-row[data-archived='true'] .spark-history-open {
+  opacity: 0.6;
+}
+
+/* The open button is the whole row: the title and the date share one line —
+   the title ellipsizes to give the date its right edge — and the project
+   sits underneath, small and quiet. */
 .spark-history-open {
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.75rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.1rem;
   text-align: left;
-  padding: 0.35rem 0.5rem;
+  padding: 0.4rem 0.5rem;
   font-size: 0.8125rem;
   color: var(--text-muted);
 }
 
-.spark-history-open span {
+.spark-history-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.spark-history-title {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--text);
 }
 
-.spark-history-open small {
+.spark-history-date {
   flex: none;
   font-size: 0.6875rem;
   color: var(--text-faintest);
 }
 
-.spark-history-row .icon-button {
+.spark-history-project {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.6875rem;
+  color: var(--text-faintest);
+}
+
+/* The row's "…" — the same menu the right-click raises. Absolutely placed so
+   it takes no layout space: the list's rows are all one height with or
+   without it, and nothing shifts when it appears. Inert while hidden —
+   `opacity` alone would eat the click underneath it, the trap in AGENTS.md. */
+.spark-history-menu {
+  position: absolute;
+  top: 50%;
+  right: 0.3rem;
+  transform: translateY(-50%);
   width: 24px;
   height: 24px;
   opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--fast) var(--ease);
 }
 
-.spark-history-row:hover .icon-button {
+.spark-history-row:hover .spark-history-menu,
+.spark-history-row:focus-within .spark-history-menu {
   opacity: 1;
+  pointer-events: auto;
 }
 
-.spark-history-row .icon-button svg {
+.spark-history-menu svg {
   width: 13px;
   height: 13px;
+}
+
+/* The group headings "By project" mode draws — a project's short name, or
+   "No project" for the chats that have none. */
+.spark-history-group {
+  margin: 0;
+  padding: 0.45rem 0.5rem 0.15rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--text-faintest);
+}
+
+/* The search field above the conversation list. Sticky, because a long list
+   scrolling under a field that filters it would lose the filter the moment
+   you scrolled. */
+.spark-history-search {
+  flex: 1;
+  min-width: 0;
+  position: sticky;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.45rem;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+}
+
+.spark-history-search > svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+}
+
+.spark-history-search-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: none;
+  font-size: 0.8125rem;
+  color: var(--text);
+}
+
+.spark-history-search-input::placeholder {
+  color: var(--text-faintest);
+}
+
+.spark-history-search .nav-search-clear {
+  flex: none;
+}
+
+.spark-overlay-search .icon-button {
+  flex: none;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+}
+
+.spark-overlay-search .icon-button[aria-pressed='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Row container for `.spark-scroll` — the transcript's own box. */
+.spark-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
 }
 
 .spark-scroll {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
   padding: 1rem var(--gutter) 1.5rem;
 }
 
+/* Turns stop at the note's measure and centre themselves — the same column
+   the editor reads in, so a chat in a wide panel is a column, not a runway.
+   A user turn keeps its right alignment *within* the column. */
+.spark-scroll > * {
+  max-width: var(--editor-measure);
+  margin-inline: auto;
+}
+
+/* -- Projects -------------------------------------------------------------- */
+
+.spark-projects {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.5rem 0.35rem;
+}
+
+.spark-projects-new {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: 1px dashed var(--rule-strong);
+  border-radius: var(--radius-sm);
+  background: none;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.spark-projects-new:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.spark-projects-new svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* Projects grid: cards when wide, list when narrow. */
+.spark-projects-grid {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.4rem;
+}
+
+.spark-projects-grid[data-narrow] {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.spark-project-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.6rem 0.55rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  /* Chromium sizes `button` to its content no matter what `display` says —
+     a block child of the grid cell would fill it, this button will not. An
+     explicit width is the only way to make the card own its whole cell. */
+  width: 100%;
+}
+
+.spark-project-card:hover {
+  border-color: var(--accent);
+}
+
+.spark-projects-grid[data-narrow] .spark-project-card {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.6rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+}
+
+.spark-projects-grid[data-narrow] .spark-project-card:hover {
+  background: var(--surface);
+  border-color: transparent;
+}
+
+.spark-project-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.spark-projects-grid[data-narrow] .spark-project-card-head {
+  flex: 1;
+  min-width: 0;
+}
+
+.spark-project-card-icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--text-faint);
+}
+
+.spark-projects-grid[data-narrow] .spark-project-card-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.spark-project-card-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.spark-project-card-desc {
+  font-size: 0.6875rem;
+  color: var(--text-faint);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.spark-projects-grid[data-narrow] .spark-project-card-desc {
+  display: none;
+}
+
+.spark-project-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.spark-project-card-count {
+  flex: none;
+  font-size: 0.6875rem;
+  color: var(--text-faintest);
+}
+
+.spark-projects-grid[data-narrow] .spark-project-card-count {
+  font-size: 0.6875rem;
+}
+
+.spark-project-card-date {
+  flex: none;
+  font-size: 0.6875rem;
+  color: var(--text-faintest);
+}
+
+.spark-projects-grid[data-narrow] .spark-project-card-date {
+  display: none;
+}
+
+/* Project detail panel. */
+.spark-project {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.spark-project-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.spark-project-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Two-column layout: main content + right drawer. */
+.spark-project-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 0;
+  overflow: hidden;
+}
+
+.spark-project[data-narrow] .spark-project-content {
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.spark-project-main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.spark-project[data-narrow] .spark-project-main {
+  overflow-y: visible;
+}
+
+.spark-project-drawer {
+  flex: none;
+  width: 200px;
+  border-left: 1px solid var(--rule);
+  overflow-y: auto;
+  padding: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.spark-project[data-narrow] .spark-project-drawer {
+  width: auto;
+  border-left: none;
+  border-top: 1px solid var(--rule);
+  overflow-y: visible;
+}
+
+.spark-project-description input {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 0.35rem 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--text);
+}
+
+.spark-project-description input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.spark-project-composer {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.spark-project-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.spark-project-field textarea {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 0.45rem 0.55rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--text);
+  resize: vertical;
+}
+
+.spark-project-field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.spark-project-attachments-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.spark-project-attachments-head .icon-button {
+  width: 24px;
+  height: 24px;
+}
+
+.spark-project-attachments,
+.spark-project-chats {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.spark-project-attachments li,
+.spark-project-chats li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.4rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.spark-project-attachments li span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spark-project-attachments .icon-button {
+  width: 22px;
+  height: 22px;
+  opacity: 0;
+}
+
+.spark-project-attachments li:hover .icon-button {
+  opacity: 1;
+}
+
+.spark-project-chats li {
+  background: none;
+  padding: 0.15rem 0.2rem;
+}
+
+.spark-project-chats button {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  font-size: 0.75rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.spark-project-chats button:hover {
+  color: var(--accent);
+}
+
+.spark-project-empty {
+  color: var(--text-faintest);
+  font-style: italic;
+}
+
+/* Per-project memory list. */
+.spark-project-memory {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.spark-project-memory li {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.spark-project-memory input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 0.3rem 0.4rem;
+  font-size: 0.75rem;
+  color: var(--text);
+}
+
+.spark-project-memory input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.spark-project-memory .icon-button {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  opacity: 0;
+}
+
+.spark-project-memory li:hover .icon-button {
+  opacity: 1;
+}
+
+/* The title-and-text form behind "Attach text", in the composer and the
+   project panel alike. */
+.spark-attach-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 300px;
+  max-width: 420px;
+}
+
+.spark-attach-text-title,
+.spark-attach-text-body {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 0.4rem 0.55rem;
+  font-size: 0.8125rem;
+  color: var(--text);
+  font-family: var(--font-ui);
+}
+
+.spark-attach-text-title:focus,
+.spark-attach-text-body:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.spark-attach-text-body {
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.spark-attach-text .button {
+  align-self: flex-end;
+}
+
+/* The file list picker inside the attach popovers. */
+.popover-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 240px;
+  max-width: 380px;
+}
+
+.popover-list .menu-item {
+  max-width: 100%;
+}
+
+.popover-list .menu-item-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .spark-turn {
   margin-bottom: 1.25rem;
-  max-width: var(--editor-measure);
 }
 
 .spark-turn[data-role='user'] {
@@ -3009,6 +4286,14 @@ kbd {
   line-height: 1.65;
   color: var(--text);
   overflow-wrap: anywhere;
+  /* A reply's prose is no longer always the last thing in the turn — a tool
+     call can follow it mid-answer — so it needs its own trailing space the
+     way `.spark-think` and `.spark-tools` already carry theirs. */
+  margin-bottom: 0.5rem;
+}
+
+.spark-prose:last-child {
+  margin-bottom: 0;
 }
 
 .spark-prose > :first-child {
@@ -3109,24 +4394,6 @@ kbd {
   text-decoration: line-through;
 }
 
-/* The caret that says a reply is still arriving. */
-.spark-cursor {
-  display: inline-block;
-  width: 0.5em;
-  height: 1em;
-  margin-left: 0.1em;
-  vertical-align: text-bottom;
-  background: var(--accent);
-  opacity: 0.65;
-  animation: spark-blink 1s steps(2, start) infinite;
-}
-
-@keyframes spark-blink {
-  50% {
-    opacity: 0;
-  }
-}
-
 /* -- What Spark did -------------------------------------------------------- */
 
 .spark-tools {
@@ -3139,13 +4406,18 @@ kbd {
 }
 
 .spark-tools li {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
   font-size: 0.75rem;
   color: var(--text-faint);
   padding: 0.15rem 0.5rem;
   border-left: 2px solid var(--rule-strong);
+}
+
+/* The summary line itself — was the whole `li` before an optional detail
+   block needed room underneath it, so this is just that row pulled out. */
+.spark-tool-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 
 .spark-tools li[data-pending='true'] {
@@ -3168,7 +4440,6 @@ kbd {
 }
 
 .spark-error {
-  max-width: var(--editor-measure);
   padding: 0.6rem 0.85rem;
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--danger) 10%, transparent);
@@ -3176,107 +4447,497 @@ kbd {
   font-size: 0.8125rem;
 }
 
-/* -- Empty state ----------------------------------------------------------- */
-
-.spark-welcome {
-  max-width: var(--editor-measure);
-  color: var(--text-faint);
-  font-size: 0.875rem;
-  line-height: 1.6;
+/* The conversation is approaching the answering model's context window —
+   amber at 75%, the same danger tint `.spark-error` uses once it's closer
+   to actually losing context (90%). */
+.spark-context-warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.85rem;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text-muted);
+  font-size: 0.8125rem;
 }
+
+.spark-context-warning[data-urgent] {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--danger);
+}
+
+.spark-context-warning .button {
+  flex: none;
+}
+
+/* -- Empty state ----------------------------------------------------------- */
 
 .spark-warning {
   color: var(--danger);
 }
 
-.spark-suggestions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  margin-top: 1rem;
-}
-
-.spark-suggestion {
-  padding: 0.35rem 0.7rem;
-  border-radius: 99px;
-  border: 1px solid var(--rule);
-  background: var(--surface);
-  font-size: 0.8125rem;
-  color: var(--text-muted);
-  text-align: left;
-}
-
-.spark-suggestion:hover {
-  border-color: var(--accent-faint);
-  color: var(--text);
-}
-
-/* -- Composer -------------------------------------------------------------- */
+/* -- Composer --------------------------------------------------------------
+ *
+ * One box with one border, laid out as writing on top and controls beneath:
+ *
+ *   ┌──────────────────────────────────────────┐
+ *   │  Ask about your notes                🎤  │
+ *   │ ──────────────────────────────────────── │
+ *   │  +  /  │  Improvements      ⚡ Fast   ↑  │
+ *   └──────────────────────────────────────────┘
+ *
+ * The textarea has no border of its own. That is the whole change from the old
+ * shape, and it is the one that matters: a bordered input inside a bordered
+ * composer is a box in a box, which is what made a message read as a field on a
+ * form rather than as the reason the panel exists.
+ * ----------------------------------------------------------------------- */
 
 .spark-composer {
   flex: none;
-  display: flex;
-  /* Wraps so the attachment row can take a line of its own above the input,
-     rather than squeezing into the row with it. */
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 0.4rem;
-  padding: 0.6rem var(--gutter) calc(0.6rem + env(safe-area-inset-bottom));
-  border-top: 1px solid var(--rule);
-  background: var(--bg);
+  position: relative;
+  margin: 0 var(--gutter) calc(0.65rem + env(safe-area-inset-bottom));
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  transition:
+    border-color var(--fast) var(--ease),
+    box-shadow var(--fast) var(--ease);
 }
 
-/* -- Attachments ----------------------------------------------------------- */
+/* The focus ring is on the *composer*, because the composer is the control.
+   `:focus-within` rather than a class, so tabbing to the model dial lights it
+   up too — everything in here belongs to the message being written. */
+.spark-composer:focus-within {
+  border-color: var(--accent-faint);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
 
-.spark-attachments {
-  flex-basis: 100%;
-  list-style: none;
-  margin: 0;
+.spark-composer-form {
+  display: flex;
+  flex-direction: column;
+  /* A hard backstop under the JS-measured collapsing in `.spark-actions`: at
+     the panel's narrowest, nothing in the button bar is allowed to visibly
+     spill past the composer's own edge — not `.spark-composer` itself, or
+     this would also clip the slash-command menu, which is a sibling of this
+     form and deliberately positioned *above* the box. */
+  overflow: hidden;
+}
+
+.spark-composer-text {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.25rem;
+  padding: 0.55rem 0.5rem 0.45rem 0.7rem;
+}
+
+.spark-input {
+  flex: 1;
+  min-width: 0;
+  /* Grows with the message and then scrolls, so the composer never eats the
+     conversation it belongs to. */
+  min-height: 1.6rem;
+  max-height: 40vh;
+  field-sizing: content;
+  resize: none;
   padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
+  border: none;
+  background: none;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  outline: none;
 }
 
-.spark-attachments li {
+.spark-input::placeholder {
+  color: var(--text-faintest);
+}
+
+/* Sits with the first line of text rather than centred in a box that grows. */
+.spark-composer-text .spark-mic {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  color: var(--text-faint);
+}
+
+.spark-composer-text .spark-mic svg {
+  width: 15px;
+  height: 15px;
+}
+
+.spark-mic[data-recording='true'] {
+  color: var(--danger);
+  animation: spark-pulse 1.4s var(--ease) infinite;
+}
+
+@keyframes spark-pulse {
+  50% { opacity: 0.45; }
+}
+
+/* -- The button bar -------------------------------------------------------- */
+
+.spark-actions {
   display: flex;
   align-items: center;
-  gap: 0.2rem;
+  /* Tight on purpose: at the sidebar's default width this row and both dials
+     were a handful of pixels apart from fitting, which meant the model and
+     permission dials collapsed into the overflow menu by default rather than
+     only when the panel was genuinely narrow. */
+  gap: 0.1rem;
+  min-width: 0;
+  padding: 0.3rem 0.3rem 0.35rem;
+  border-top: 1px solid var(--rule);
+}
+
+.spark-actions .icon-button {
+  width: 28px;
+  height: 28px;
+  color: var(--text-faint);
+  position: relative;
+}
+
+.spark-actions .icon-button:hover {
+  color: var(--text);
+}
+
+/* The model dial, the permission dial or the neighbour chip has collapsed
+   into this menu for lack of room — a fact about the panel's width, and
+   worth a quiet mark so the ellipsis doesn't read as "nothing in here but
+   preferences" when it is actually holding a control you'd expect in the bar. */
+.icon-button[data-overflowing]::after {
+  content: '';
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.spark-actions .icon-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Takes the slack, so the two dials and send sit against the right edge. */
+.spark-actions-gap {
+  flex: 1;
+  min-width: 0.25rem;
+}
+
+/* The aggregate attachment cap, breached before the message is even sent —
+   see `overAttachmentBudget` in SparkView.tsx. Inline in the same row as the
+   chips it is warning about, not a banner of its own: it is a fact about
+   what's already attached, not a separate event. */
+.spark-attachment-warning {
+  flex: none;
   max-width: 14rem;
-  padding: 0.2rem 0.25rem 0.2rem 0.55rem;
-  border-radius: 99px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  color: var(--danger);
+}
+
+/* Divides "what is going with this" from the buttons that add to it. */
+.spark-actions-rule {
+  flex: none;
+  align-self: stretch;
+  width: 1px;
+  margin: 0.25rem 0.3rem;
+  background: var(--rule);
+}
+
+.spark-send {
+  flex: none;
+  border-radius: var(--radius-sm);
+}
+
+/* Filled only once there is something to send. An always-solid button is a
+   button whose state says nothing; this one is the readiness indicator. */
+.spark-send[data-ready] {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.spark-send[data-ready]:hover {
+  filter: brightness(1.08);
+}
+
+.spark-send:disabled {
+  color: var(--text-faintest);
+  cursor: default;
+}
+
+/* -- The dials ------------------------------------------------------------- */
+
+/*
+ * The model and the permission mode. Text buttons rather than icon ones,
+ * because which model is answering and how much it may do unattended are the
+ * two things you want to read without hovering anything.
+ */
+.spark-dial {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  height: 26px;
+  padding: 0 0.3rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* Laid out but never painted: `scrollWidth` here is the dials' true rendered
+   width, so the composer can fold them away from a measurement instead of a
+   guessed breakpoint. See `SparkComposer.tsx`. */
+.spark-actions-measure {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  /* Matches `.spark-actions`'s own gap, so the measurement reflects the gap
+     the dials will actually sit in once they're back in the real row. */
+  gap: 0.1rem;
+}
+
+.spark-dial:hover {
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+
+.spark-dial svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+}
+
+/* The chevron is the affordance, not the content: quieter than the label. */
+.spark-dial > svg:last-child {
+  width: 11px;
+  height: 11px;
+  color: var(--text-faintest);
+}
+
+.mode-emoji {
+  line-height: 1;
+}
+
+/* Manual is the one mode worth catching your eye — it means every call stops
+   and waits for you, and not noticing that is how a turn appears to hang. */
+.spark-dial[data-mode='manual'] {
+  color: var(--accent);
+}
+
+/* -- Chips ----------------------------------------------------------------- */
+
+/*
+ * Everything travelling with the message: a note you picked, the passage you
+ * have selected, a file you dropped, a page Spark presented. Scrolls sideways
+ * rather than wrapping — the bar is one row by design, and a fifth attachment
+ * must not push the send button onto a second line.
+ */
+.spark-context {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.spark-context::-webkit-scrollbar {
+  display: none;
+}
+
+/* The `neighbour` chip's own track, separate from the strip above. It is
+   automatic rather than chosen, so it must not be able to scroll out of
+   view the way a chip someone attached can — its visibility is a decision
+   the composer's JS collapse levels make, not an accident of scroll
+   position. `flex: none` so it never yields width the way the shrinkable,
+   scrollable strip does; the measurement in `SparkComposer.tsx` is what
+   decides whether it fits, not the flexbox. */
+.spark-neighbour {
+  flex: none;
+  overflow: visible;
+}
+
+.spark-context li {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 12rem;
+  height: 24px;
+  padding: 0 0.45rem 0 0.4rem;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--rule);
-  background: var(--surface);
+  background: var(--bg);
   font-size: 0.75rem;
   color: var(--text-muted);
 }
 
-.spark-attachments li[data-pending='true'] {
+/* A passage rather than a page — tinted, because "the bit I highlighted" and
+   "the whole note" are different enough that reading the label is too slow. */
+.spark-context li[data-kind='selection'] {
   border-color: var(--accent-faint);
   color: var(--accent);
-  padding-right: 0.55rem;
 }
 
-.spark-attachments span {
+.spark-context li[data-pending='true'] {
+  padding-right: 0.4rem;
+  border-color: var(--accent-faint);
+  color: var(--accent);
+}
+
+/* Hidden from Spark without being removed — greyed rather than gone, because
+   the note is still there and still beside you; only what gets sent changed. */
+.spark-context li[data-hidden] {
+  border-style: dashed;
+  color: var(--text-faintest);
+  opacity: 0.7;
+}
+
+/* The neighbour chip, narrowed to just its eye — as if the name were never
+   drawn rather than merely truncated. The `<li>` itself sheds the rectangular
+   chip chrome entirely; `.spark-context-eye` carries its own outline instead,
+   an outline rather than a filled chip because there is nothing left inside
+   it to set apart from the background. */
+.spark-context li[data-icon-only] {
+  max-width: none;
+  padding: 0;
+  border: none;
+  background: none;
+}
+
+.spark-context .icon-button.spark-context-eye {
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  color: var(--text-faintest);
+}
+
+.spark-context li[data-hidden] .spark-context-eye {
+  border-style: dashed;
+  opacity: 0.7;
+}
+
+.spark-context-glyph {
+  display: grid;
+  place-items: center;
+  color: var(--text-faintest);
+}
+
+.spark-context li[data-kind='selection'] .spark-context-glyph {
+  color: inherit;
+}
+
+.spark-context-glyph svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+}
+
+.spark-context-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.spark-attachments .icon-button {
-  width: 18px;
-  height: 18px;
-  color: var(--text-faint);
+.spark-context-name small {
+  color: var(--text-faintest);
 }
 
-.spark-attachments .icon-button svg {
+.spark-context .icon-button {
+  width: 18px;
+  height: 18px;
+  color: var(--text-faintest);
+}
+
+.spark-context .icon-button svg {
   width: 11px;
   height: 11px;
 }
 
-/* The real input is unreachable; the paperclip is what you press. */
+/* The real input is unreachable; the plus is what you press. */
 .spark-file-input {
   display: none;
+}
+
+/* -- Slash commands -------------------------------------------------------- */
+
+/*
+ * Above the composer, not in a popover: it belongs to the text being typed and
+ * has to stay open while the textarea keeps focus, which a popover — which takes
+ * focus when it opens — cannot do.
+ */
+.spark-slash {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 0.35rem);
+  z-index: 12;
+  max-height: 17rem;
+  overflow-y: auto;
+  padding: 0.25rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg, 0 12px 32px rgb(0 0 0 / 0.18));
+}
+
+.spark-slash-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.3rem 0.45rem;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.spark-slash-row[data-active] {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.spark-slash-name {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--accent);
+}
+
+.spark-slash-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+}
+
+/* Yours, not the app's — see `commands.ts` for why the two lists stay apart. */
+.spark-slash-kind {
+  flex: none;
+  padding: 0.05rem 0.3rem;
+  border-radius: 99px;
+  background: var(--surface-sunken);
+  font-size: 0.625rem;
+  color: var(--text-faintest);
 }
 
 /* -- Memory, in the conversation ------------------------------------------- */
@@ -3324,6 +4985,925 @@ kbd {
 }
 
 /* ---------------------------------------------------------------------------
+ * Spark, part two: the mark, the transcript's furniture, and finding things.
+ * ------------------------------------------------------------------------ */
+
+/*
+ * The mark.
+ *
+ * The artwork is a gradient-shaded shape, not `currentColor`, and every other
+ * icon in the chrome is one flat ink colour applied by CSS — a mark that is
+ * sometimes tinted blue and sometimes whatever `.icon-button` says would read
+ * as two products sharing a toolbar. `grayscale(1)` is what keeps it in the
+ * same family everywhere it appears, from a 13px rail icon to the 132px
+ * watermark; nothing here recolours it, because there is no `currentColor` to
+ * recolour.
+ */
+.spark-logo,
+.icon-button .spark-logo,
+.spark-mark .spark-logo {
+  fill: currentColor;
+  stroke: none;
+  flex: none;
+  filter: grayscale(1);
+}
+
+/*
+ * A size step above the ambient lucide glyph in ordinary chrome, so the one
+ * icon in the app with a name reads as itself rather than disappearing into a
+ * row of stroked icons. One rule for every place that is a row of icons
+ * beside this one — the toolbar, the settings rail tab, the Memory page's own
+ * header — so a further bump is a single number rather than three that have
+ * to be kept in step. There is no literal stroke to thicken (the artwork is a
+ * filled gradient shape, not a stroked path — see `SparkLogo.tsx`), so "more
+ * visible" here means larger, applied uniformly. Not everywhere: the chat
+ * header (`.spark-mark`, above) and the two "nothing is open here" marks (the
+ * empty-tile watermark, the welcome screen) state their own size and are
+ * deliberately left out of this rule.
+ */
+.icon-button .spark-logo,
+.settings-rail-tab .spark-logo,
+.memory-head .spark-mark .spark-logo {
+  width: 22px;
+  height: 22px;
+}
+
+/*
+ * The navigator/Places row icon is its own case, not folded into the rule
+ * above: `.nav-row-icon` is a fixed 15×15 box shared by every row glyph, and
+ * a grid item's default `min-height`/`min-width: auto` sizes to its content's
+ * own box regardless of that — so asking for the full 22px here doesn't clip
+ * to the container, it grows past it asymmetrically and reads as the icon
+ * sitting off-centre in its row. It still reads a size step above the 14px
+ * lucide glyphs beside it in "Views", just not by as much as everywhere else.
+ */
+.nav-row-icon .spark-logo {
+  width: 18px;
+  height: 18px;
+}
+
+.spark-mark {
+  color: var(--accent);
+}
+
+/*
+ * The mark at rest, behind an empty panel.
+ *
+ * Faded by opacity rather than by recolouring: the shading is baked into the
+ * asset, so there is no `currentColor` to mix against the surface the way a
+ * flat-tinted mark would let this do. Low enough to be furniture, high enough
+ * that the panel does not look broken.
+ */
+.spark-watermark {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  opacity: 0.05;
+}
+
+/* -- The empty screen ------------------------------------------------------ */
+
+/*
+ * The mark, and one line. No suggestion chips: four examples answered "what can
+ * this do" with four things it does, which is both wrong — it does hundreds —
+ * and limiting, because people picked one instead of asking for what they
+ * actually wanted.
+ */
+.spark-welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.9rem;
+  /* Not centred in the scroller: an empty state pinned to the middle of a tall
+     panel sits below where the eye lands. A third of the way down is where a
+     first line of text would have been. */
+  padding: max(8vh, 2.5rem) 1rem 2rem;
+  text-align: center;
+}
+
+.spark-welcome-mark {
+  color: color-mix(in srgb, var(--accent) 82%, var(--text-faintest));
+  animation: spark-arrive var(--slow, 420ms) var(--ease) both;
+}
+
+/* It appears rather than being already there — the one flourish on a screen
+   whose whole job is to be quiet. */
+@keyframes spark-arrive {
+  from {
+    opacity: 0;
+    transform: scale(0.94) rotate(-8deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spark-welcome-mark {
+    animation: none;
+  }
+}
+
+.spark-greeting {
+  margin: 0;
+  max-width: 26rem;
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  color: var(--text-faint);
+  text-wrap: balance;
+}
+
+/* -- Thinking -------------------------------------------------------------- */
+
+/*
+ * What the model reasoned on the way to the answer.
+ *
+ * Set at the tool trail's size in the faint colour, because it is not addressed
+ * to you — typography says that without needing a label to say it.
+ */
+.spark-think {
+  max-width: var(--editor-measure);
+  margin-bottom: 0.5rem;
+}
+
+.spark-think-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0;
+  font-size: 0.75rem;
+  color: var(--text-faintest);
+}
+
+.spark-think-toggle:hover {
+  color: var(--text-muted);
+}
+
+.spark-think-toggle svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  transition: transform var(--fast) var(--ease);
+}
+
+.spark-think[data-open] .spark-think-toggle svg {
+  transform: rotate(-6deg) scale(1.05);
+}
+
+/* Live thinking gets the accent: mid-turn it is the most interesting thing on
+   the screen, and afterwards it is a footnote. */
+.spark-think[data-live] .spark-think-toggle {
+  color: var(--accent);
+}
+
+.spark-think-body {
+  max-height: 14rem;
+  overflow-y: auto;
+  margin-top: 0.35rem;
+  padding: 0.5rem 0.7rem;
+  border-left: 2px solid var(--rule);
+  background: color-mix(in srgb, var(--surface-sunken) 60%, transparent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 0.8125rem;
+  line-height: 1.65;
+  color: var(--text-faint);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  animation: spark-unfold var(--fast) var(--ease);
+}
+
+.spark-think[data-live] .spark-think-body {
+  border-left-color: var(--accent-faint);
+}
+
+@keyframes spark-unfold {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+}
+
+/*
+ * The caret.
+ *
+ * Shown wherever text is arriving — in the reply and in the thinking — because
+ * the gap between tokens on a slow model is long enough to read as a hang, and a
+ * blinking caret is the cheapest possible "still going". A soft pulse rather
+ * than a hard on/off: a hard blink at the end of a paragraph reads as an error
+ * state.
+ */
+.spark-cursor {
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  margin-left: 0.1em;
+  vertical-align: text-bottom;
+  border-radius: 1px;
+  background: var(--accent);
+  animation: spark-blink 1.15s var(--ease) infinite;
+}
+
+@keyframes spark-blink {
+  0%, 45% { opacity: 1; }
+  55%, 100% { opacity: 0.15; }
+}
+
+/* -- The tool trail -------------------------------------------------------- */
+
+/* Every page a call touched is a link, because the commonest thing to want
+   after reading "Edited Improvements" is to look at Improvements. */
+.spark-tool-link {
+  display: inline;
+  padding: 0 0.15rem;
+  border-radius: 3px;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: var(--accent-faint);
+  text-underline-offset: 2px;
+}
+
+.spark-tool-link:hover {
+  background: var(--accent-soft);
+}
+
+/* Collapsed by default — see `TOOL_DETAIL_EXPAND_THRESHOLD` for why this
+   only appears when a tool's own detail is worth a second look. Pushed to
+   the row's end with `margin-left: auto` rather than sitting beside the
+   summary text, so it reads as a control on the row, not a continuation of
+   the sentence. */
+.spark-tool-expand {
+  margin-left: auto;
+  flex: none;
+  font: inherit;
+  font-size: 0.7rem;
+  color: var(--text-faint);
+  padding: 0 0.3rem;
+  border-radius: 3px;
+  text-decoration: underline;
+  text-decoration-color: var(--rule-strong);
+  text-underline-offset: 2px;
+}
+
+.spark-tool-expand:hover {
+  color: var(--text);
+  background: var(--surface-sunken);
+}
+
+/* What a tool actually read, wrote or ran, once asked for. Monospace and
+   scrolling of its own accord — `run_code`'s stdout in particular can be
+   wide — rather than wrapping into the narrow trail column or stretching
+   the panel. */
+.spark-tool-detail {
+  margin: 0.3rem 0 0.15rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 6px;
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+/* A retrieval tool's own sources — what a reply drawing on it can actually
+   be checked against, one clickable label per passage/result/chat. */
+.spark-tool-citations {
+  list-style: none;
+  margin: 0.3rem 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.spark-tool-citations li {
+  border-left: none;
+  padding: 0;
+}
+
+.spark-tool-citations .spark-tool-link {
+  display: inline-block;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+/* A call parked on a question. Not an error and not a success — it is waiting,
+   and the trail has to say so or the turn looks hung. */
+.spark-tools li[data-awaiting='true'] {
+  color: var(--accent);
+  animation: spark-pulse 1.6s var(--ease) infinite;
+}
+
+/* A page presented in the transcript — a card with a button to open it,
+   rather than the page being opened for you. Same bordered-pill language as
+   `.spark-context`'s chips, but wraps onto more than one line rather than
+   scrolling sideways: this sits in the transcript, not the composer bar. */
+.spark-presented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  list-style: none;
+}
+
+.spark-presented-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 100%;
+  padding: 0.3rem 0.3rem 0.3rem 0.6rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.spark-presented-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.spark-presented-open {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.spark-presented-open:hover {
+  background: var(--accent-faint);
+}
+
+.spark-presented-open svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+}
+
+/* -- Approval -------------------------------------------------------------- */
+
+/*
+ * A tool call waiting for a yes.
+ *
+ * Given a real border and the surface colour, unlike everything else in the
+ * transcript: it is the one thing here that is not a record of what happened but
+ * a question that stops the work, and it has to look like a control rather than
+ * like prose.
+ */
+.spark-approval {
+  max-width: var(--editor-measure);
+  margin: 0.5rem 0 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--accent-faint);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.spark-approval-what {
+  margin: 0 0 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.spark-approval-what strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.spark-approval-input {
+  display: block;
+  margin-top: 0.2rem;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+
+.spark-approval-actions {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.spark-approval-actions .button {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+}
+
+.spark-approval-actions .button svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2.5;
+}
+
+/* -- What you can do with a turn ------------------------------------------- */
+
+/*
+ * Copy, rewind, try again. Revealed on hover of the turn: they belong to a
+ * message you have decided something about, and a permanent row of three
+ * buttons under every message is a toolbar pretending to be a conversation.
+ * They keep their space reserved, so revealing one never reflows the transcript.
+ */
+.spark-turn {
+  position: relative;
+}
+
+.spark-turn-actions {
+  display: flex;
+  gap: 0.1rem;
+  margin-top: 0.15rem;
+  opacity: 0;
+  transition: opacity var(--fast) var(--ease);
+}
+
+.spark-turn[data-role='user'] .spark-turn-actions {
+  justify-content: flex-end;
+}
+
+.spark-turn:hover .spark-turn-actions,
+.spark-turn:focus-within .spark-turn-actions {
+  opacity: 1;
+}
+
+/* Tokens/cost for the turn — text, not a button, so it sits at the row's far
+   end without looking like one more thing to click. Same hover-reveal as
+   the rest of `.spark-turn-actions`; the full breakdown is in its `title`. */
+.spark-turn-usage {
+  margin-left: auto;
+  align-self: center;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faintest);
+  padding: 0 0.3rem;
+}
+
+.spark-turn-actions .icon-button {
+  width: 22px;
+  height: 22px;
+  color: var(--text-faintest);
+}
+
+.spark-turn-actions .icon-button:hover {
+  color: var(--text);
+}
+
+.spark-turn-actions .icon-button svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* Which of a regenerated turn's replies is showing, and the two arrows that
+   move between them — the same pair the hovered turn's arrow keys drive. */
+.spark-variant-switcher {
+  display: flex;
+  align-items: center;
+  gap: 0.05rem;
+  margin-right: 0.2rem;
+  padding-right: 0.2rem;
+  border-right: 1px solid var(--rule);
+  font-size: 0.7rem;
+  color: var(--text-faintest);
+}
+
+.spark-variant-switcher span {
+  min-width: 1.6em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.spark-variant-switcher .icon-button:disabled {
+  opacity: 0.35;
+}
+
+/* The user turn is a right-aligned bubble, so its actions have to be part of
+   the same column rather than a sibling that resets the alignment. */
+.spark-turn[data-role='user'] {
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+/* -- History --------------------------------------------------------------- */
+
+/*
+ * Over the conversation rather than above it.
+ *
+ * It used to push the transcript down, which meant opening the history moved
+ * the thing you were reading and closing it moved it back. A dropdown costs the
+ * same gesture and disturbs nothing behind it.
+ */
+.spark-history-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 14;
+}
+
+.spark-history {
+  position: absolute;
+  top: 2.4rem;
+  right: 0.5rem;
+  left: 0.5rem;
+  z-index: 15;
+  /* Eight rows plus the search field, then it scrolls. Nine conversations is
+     a list; forty is a wall, and a dropdown as tall as the panel is a panel. */
+  max-height: calc(var(--history-rows, 8) * 2.1rem + 2.7rem);
+  overflow-y: auto;
+  padding: 0.35rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg, 0 12px 32px rgb(0 0 0 / 0.18));
+  animation: spark-unfold var(--fast) var(--ease);
+}
+
+/* -- Find ------------------------------------------------------------------ */
+
+.spark-find {
+  position: absolute;
+  top: 2.4rem;
+  right: 0.5rem;
+  /* Bounded to the panel it's drawn over, same as `.findbar` — without this
+     the bar was free to render wider than a narrow Spark sidebar and spill
+     past its edge. */
+  max-width: calc(100% - 1rem);
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.3rem 0.25rem 0.5rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg, 0 12px 32px rgb(0 0 0 / 0.18));
+}
+
+.spark-find > svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  stroke: var(--text-faintest);
+  fill: none;
+  stroke-width: 2;
+}
+
+.spark-find-input {
+  /* A shrinkable basis rather than a fixed width, so the input — not the
+     count or the close button — is what gives when the panel is narrow. */
+  flex: 1 1 11rem;
+  min-width: 3rem;
+  padding: 0.15rem 0;
+  border: none;
+  background: none;
+  font-size: 0.8125rem;
+  color: var(--text);
+  outline: none;
+}
+
+.spark-find-count {
+  flex: none;
+  min-width: 2.5rem;
+  font-size: 0.6875rem;
+  color: var(--text-faintest);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.spark-find .icon-button {
+  flex: none;
+  width: 22px;
+  height: 22px;
+}
+
+.spark-find .icon-button svg {
+  width: 12px;
+  height: 12px;
+}
+
+/*
+ * Painted over the DOM rather than into it — see `FindInChat`. React owns the
+ * rendered markdown, and splitting its text nodes to insert `<mark>` would
+ * either fight the next render or mean re-implementing the renderer.
+ */
+::highlight(spark-find) {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+/* Positioning context for the dropdown, the find bar and the watermark. */
+.spark {
+  position: relative;
+}
+
+.spark:focus {
+  outline: none;
+}
+
+/* -- Pickers Spark adds ---------------------------------------------------- */
+
+.picker-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+}
+
+.picker-icon:hover {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.picker-icon svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+}
+
+.picker-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.3rem 0.45rem;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.picker-row:hover {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.picker-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-row-where {
+  flex: none;
+  font-size: 0.6875rem;
+  color: var(--text-faintest);
+}
+
+
+/* -- Model presets, in Settings -------------------------------------------- */
+
+/*
+ * A row per preset: glyph, name, model, thinking budget, shown, delete.
+ *
+ * Not a `.settings-field` — that is label-left/control-right with the gap taking
+ * the slack, which is the right shape for one control and the wrong one for six
+ * that have to line up as columns down a list.
+ */
+.settings-modes {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.settings-modes li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.settings-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* The provider/fallback pickers sit on their own line under the row, indented
+   to land under the label rather than the grip and icon — those two are
+   permanent per-row furniture, not part of what's being configured here. */
+.settings-mode-providers {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding-left: 2.15rem;
+}
+
+.settings-mode-providers label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.6875rem;
+  color: var(--text-faintest);
+}
+
+.settings-mode-providers select {
+  font-size: 0.75rem;
+  max-width: 10rem;
+}
+
+/* A preset that is switched off still shows its settings — you are editing it,
+   not deleting it — but reads as inactive. */
+.settings-modes li[data-off] {
+  opacity: 0.55;
+}
+
+/* The preset being dragged reads as picked up: a shadow under a row that
+   normally has none, and a background to put the shadow on. */
+.settings-modes li[data-dragging] {
+  position: relative;
+  z-index: 1;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-md, 0 4px 14px rgb(0 0 0 / 0.14));
+}
+
+/* The drag handle. Its press means nothing on its own — it exists to be
+   dragged — so there is no click to preserve and no threshold to cross
+   (`touch-action: none` is what keeps a touch drag from scrolling the panel
+   instead). */
+.settings-modes .mode-grip {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--text-faintest);
+  cursor: grab;
+  touch-action: none;
+}
+
+.settings-modes .mode-grip:hover {
+  color: var(--text-muted);
+}
+
+.settings-modes .mode-grip:active {
+  cursor: grabbing;
+}
+
+.settings-modes .mode-grip svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+}
+
+.settings-mode-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  color: var(--text-muted);
+}
+
+.settings-mode-icon:hover {
+  border-color: var(--accent-faint);
+  color: var(--text);
+}
+
+.settings-mode-icon svg {
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+}
+
+.settings-mode-label {
+  flex: 0 1 8rem;
+  min-width: 5rem;
+}
+
+.settings-mode-model {
+  flex: 1 1 10rem;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.settings-mode-think {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.6875rem;
+  color: var(--text-faintest);
+}
+
+.settings-mode-think input {
+  width: 4.5rem;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-modes .switch {
+  flex: none;
+}
+
+.settings-modes .icon-button {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  color: var(--text-faintest);
+}
+
+.settings-modes .icon-button:hover {
+  color: var(--danger);
+}
+
+.settings-modes .icon-button svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* -- Provider profiles ------------------------------------------------------ */
+
+.settings-providers {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.settings-provider-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.settings-provider-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.settings-provider-label {
+  font-weight: 600;
+}
+
+.settings-provider-badge {
+  font-size: 0.6875rem;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+}
+
+.settings-provider-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+}
+
+.settings-provider-editing {
+  gap: 0.7rem;
+}
+
+/* Custom instructions: a paragraph, so it gets the full width rather than the
+   right-hand control column a one-line field would sit in. */
+.settings-textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 6rem;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+/* ---------------------------------------------------------------------------
  * Memory
  *
  * A reading page, not a control panel: the measure is the editor's, the lists
@@ -3340,13 +5920,23 @@ kbd {
   overflow-y: auto;
 }
 
+/*
+ * Full width, unlike a note's own reading column: this is a panel of controls
+ * and short lists, not prose set for reading, and the tile it sits in is
+ * whatever width the person gave it — a page-shaped column down the middle of
+ * a wide window read as unused space either side of it, not as restraint.
+ */
 .memory-head {
   flex: none;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 0.6rem;
   padding: 1rem var(--gutter);
   border-bottom: 1px solid var(--rule);
+}
+
+.memory-head .button {
+  flex: none;
 }
 
 .memory-title h1 {
@@ -3364,11 +5954,23 @@ kbd {
 
 .memory-body {
   padding: 1.25rem var(--gutter) 2rem;
-  max-width: var(--editor-measure);
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
 }
 
+/*
+ * Each of Spark's four kinds of memory reads as its own card rather than a
+ * heading in a continuous scroll — a person disagreeing with one line in
+ * Conventions should be able to tell at a glance which of the four files it
+ * would come out of, without reading a label to be sure which section they're
+ * in.
+ */
 .memory-section {
-  margin-bottom: 2rem;
+  margin: 0;
+  padding: 1rem 1.1rem;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-lg);
 }
 
 .memory-section header {
@@ -3473,48 +6075,6 @@ kbd {
 .memory-list .icon-button svg {
   width: 12px;
   height: 12px;
-}
-
-.memory-footer {
-  margin: 0;
-  padding-top: 1rem;
-  border-top: 1px solid var(--rule);
-  font-size: 0.75rem;
-  line-height: 1.6;
-  color: var(--text-faintest);
-}
-
-.spark-input {
-  flex: 1;
-  min-width: 0;
-  /* Grows with the message and then scrolls, so the composer never eats the
-     conversation it belongs to. */
-  min-height: 2.25rem;
-  max-height: 40vh;
-  field-sizing: content;
-  resize: none;
-  padding: 0.5rem 0.7rem;
-  border-radius: var(--radius);
-  border: 1px solid var(--rule);
-  background: var(--surface);
-  font-size: 0.9375rem;
-  line-height: 1.5;
-  outline: none;
-}
-
-.spark-input:focus {
-  border-color: var(--accent-faint);
-}
-
-.spark-composer .icon-button {
-  width: 34px;
-  height: 34px;
-  color: var(--accent);
-}
-
-.spark-composer .icon-button:disabled {
-  color: var(--text-faintest);
-  cursor: default;
 }
 
 /* ---------------------------------------------------------------------------
@@ -3665,4 +6225,562 @@ kbd {
   overflow: hidden;
   clip: rect(0 0 0 0);
   white-space: nowrap;
+}
+
+
+/* ---------------------------------------------------------------------------
+ * Popovers
+ *
+ * The third kind of overlay, after the dialog (a question that stops you) and
+ * the modal (a place the layout owns): a small panel tethered to a point. It is
+ * positioned entirely from JavaScript — see `Popover.tsx` — so the only
+ * geometry here is what does not depend on the anchor.
+ * ------------------------------------------------------------------------ */
+
+.popover {
+  position: fixed;
+  /*
+   * Above everything, modals included.
+   *
+   * A popover is always opened *by* whatever is topmost, so it can never be
+   * correct for it to sit under something. At 90 it was under `.window[data-modal]`
+   * at 121, which is how the icon picker in Settings opened into the DOM,
+   * measured itself, placed itself — and was invisible, behind the panel that
+   * asked for it.
+   */
+  z-index: 130;
+  left: 0;
+  top: 0;
+  max-width: min(24rem, calc(100vw - 1rem));
+  max-height: min(28rem, calc(100vh - 1rem));
+  overflow: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+  font-size: 0.8125rem;
+  /* Hidden until it has been measured and placed. One frame in the top-left
+     corner reads as a glitch, and the measurement needs it in the document. */
+  visibility: hidden;
+}
+
+.popover[data-placed='true'] {
+  visibility: visible;
+  animation: popover-in var(--fast) var(--ease);
+}
+
+.popover:focus,
+.popover:focus-visible {
+  outline: none;
+}
+
+@keyframes popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+}
+
+.popover-menu {
+  min-width: 12rem;
+  padding: 0.25rem;
+}
+
+.popover-picker {
+  padding: 0.5rem;
+}
+
+/* -- A menu ---------------------------------------------------------------- */
+
+.menu {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  color: var(--text);
+  font-size: 0.8125rem;
+}
+
+.menu-item[data-active='true'] {
+  background: var(--surface-sunken);
+}
+
+.menu-item:disabled {
+  color: var(--text-faintest);
+  cursor: default;
+}
+
+.menu-item:disabled[data-active='true'] {
+  background: none;
+}
+
+.menu-item[data-danger='true'] {
+  color: var(--danger);
+}
+
+.menu-item-icon {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  color: var(--text-faint);
+}
+
+.menu-item[data-danger='true'] .menu-item-icon {
+  color: inherit;
+}
+
+.menu-item-icon svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.menu-item-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.menu-item-hint {
+  flex: none;
+  max-width: 9rem;
+  white-space: normal;
+  text-align: right;
+  color: var(--text-faintest);
+  font-size: 0.6875rem;
+}
+
+.menu-separator {
+  height: 1px;
+  margin: 0.25rem 0.35rem;
+  background: var(--rule);
+}
+
+/* -- Pickers --------------------------------------------------------------- */
+
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 15rem;
+}
+
+.picker-search {
+  width: 100%;
+  padding: 0.35rem 0.55rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.8125rem;
+  outline: none;
+}
+
+.picker-search:focus {
+  border-color: var(--accent);
+}
+
+.picker-scroll {
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.picker-group h4 {
+  position: sticky;
+  top: 0;
+  padding: 0.3rem 0.1rem 0.2rem;
+  background: var(--surface-raised);
+  font-size: 0.625rem;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-faintest);
+}
+
+.picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(1.9rem, 1fr));
+  gap: 1px;
+}
+
+.picker-emoji {
+  display: grid;
+  place-items: center;
+  height: 1.9rem;
+  border-radius: var(--radius-sm);
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.picker-emoji:hover {
+  background: var(--surface-sunken);
+}
+
+.picker-empty {
+  padding: 0.6rem 0.2rem;
+  color: var(--text-faintest);
+}
+
+/* -- The emoji grid, bigger than the other pickers and draggable ---------- */
+
+.picker[data-picker='emoji'] {
+  min-width: 22rem;
+}
+
+.picker[data-picker='emoji'] .picker-scroll {
+  max-height: 22rem;
+}
+
+.picker[data-picker='emoji'] .picker-grid {
+  grid-template-columns: repeat(auto-fill, minmax(2.6rem, 1fr));
+}
+
+.picker[data-picker='emoji'] .picker-emoji {
+  height: 2.6rem;
+  font-size: 1.6rem;
+}
+
+.picker-drag-handle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: -0.2rem -0.2rem 0;
+  padding: 0.3rem 0.4rem;
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: grab;
+  /* Not a text-selection handle: the whole point is a press-and-drag. */
+  user-select: none;
+}
+
+.picker-drag-handle:hover {
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+}
+
+.picker-drag-handle svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+}
+
+/* -- The calendar ---------------------------------------------------------- */
+
+.picker[data-picker='date'] {
+  min-width: 16rem;
+}
+
+.picker-head {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.picker-month {
+  flex: 1;
+  text-align: center;
+  font-weight: 500;
+}
+
+.picker-step {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  font-size: 1rem;
+}
+
+.picker-step:hover {
+  color: var(--text);
+  background: var(--surface-sunken);
+}
+
+.picker-week,
+.picker-days {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 1px;
+}
+
+.picker-week span {
+  text-align: center;
+  font-size: 0.625rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faintest);
+  padding-bottom: 0.15rem;
+}
+
+.picker-day {
+  height: 1.9rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  color: var(--text);
+}
+
+.picker-day:hover {
+  background: var(--surface-sunken);
+}
+
+/* A day outside the month is context, not a choice you are being offered —
+   still clickable, because paging to it to click it is the same intent. */
+.picker-day[data-outside='true'] {
+  color: var(--text-faintest);
+}
+
+.picker-day[data-today='true'] {
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--accent-faint);
+}
+
+.picker-foot {
+  display: flex;
+  gap: 0.35rem;
+  padding-top: 0.2rem;
+  border-top: 1px solid var(--rule);
+}
+
+.picker-foot .button {
+  flex: 1;
+  justify-content: center;
+  font-size: 0.75rem;
+}
+
+/* -- Document statistics --------------------------------------------------- */
+
+.stats {
+  min-width: 14rem;
+  padding: 0.6rem 0.7rem;
+}
+
+.stats-page {
+  margin-bottom: 0.4rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--rule);
+  font-size: 0.6875rem;
+  color: var(--text-faintest);
+  word-break: break-all;
+}
+
+.stats-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.12rem 0;
+}
+
+.stats-row dt {
+  flex: 1;
+  color: var(--text-faint);
+}
+
+.stats-row dd {
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+/* ---------------------------------------------------------------------------
+ * Find
+ *
+ * Pinned to the top-right of the *view*, not of the note. It is a sibling of
+ * `.page-scroll` rather than a child of it, which is the whole difference
+ * between a bar that stays in the corner and one that scrolls away with the
+ * third paragraph — see `FindBar.tsx`.
+ * ------------------------------------------------------------------------ */
+
+.findbar {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.6rem;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-width: calc(100% - 1.2rem);
+  padding: 0.4rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+  animation: popover-in var(--fast) var(--ease);
+}
+
+.findbar-row {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.findbar-input {
+  min-width: 0;
+  width: 11rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.8125rem;
+  outline: none;
+}
+
+.findbar-input:focus {
+  border-color: var(--accent);
+}
+
+/* The one state worth colouring: nothing on screen changes when a query has no
+   matches, so without this it looks as though find is broken. */
+.findbar-input[data-missing='true'] {
+  border-color: var(--danger);
+}
+
+.findbar-count {
+  min-width: 4.5rem;
+  font-size: 0.6875rem;
+  color: var(--text-faintest);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.findbar-flags {
+  display: flex;
+  gap: 1px;
+}
+
+.findbar-flag {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--text-faintest);
+}
+
+.findbar-flag:hover {
+  color: var(--text);
+  background: var(--surface-sunken);
+}
+
+.findbar-flag[aria-pressed='true'] {
+  color: var(--accent-contrast);
+  background: var(--accent);
+}
+
+.findbar-step {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  font-size: 0.8rem;
+}
+
+.findbar-step:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-sunken);
+}
+
+.findbar-step:disabled {
+  color: var(--text-faintest);
+  opacity: 0.5;
+}
+
+.findbar-step[aria-pressed='true'] {
+  color: var(--accent);
+}
+
+.findbar-close {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  color: var(--text-faintest);
+}
+
+.findbar-close:hover {
+  color: var(--text);
+  background: var(--surface-sunken);
+}
+
+.findbar-close svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.findbar .button {
+  font-size: 0.72rem;
+  padding: 0.25rem 0.5rem;
+}
+
+/* ---------------------------------------------------------------------------
+ * Dragging a page out of the navigator
+ * ------------------------------------------------------------------------ */
+
+/*
+ * What is in the air.
+ *
+ * A tab drags its own strip along visually; a navigator row has nothing to show
+ * for itself, and a drop preview with no label under the cursor leaves you
+ * guessing what you are about to drop.
+ */
+.drag-ghost {
+  position: fixed;
+  z-index: 95;
+  pointer-events: none;
+  transform: translate(0.7rem, 0.7rem);
+  padding: 0.2rem 0.5rem;
+  max-width: 16rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The folder a drop would land in. */
+.nav-row-group[data-dropping='true'] > .nav-row {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* Cut, but not yet pasted: still there, and visibly on its way out. */
+.nav-row[data-cut='true'] {
+  opacity: 0.5;
+  font-style: italic;
 }

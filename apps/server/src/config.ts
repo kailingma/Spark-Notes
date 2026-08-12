@@ -58,6 +58,14 @@ loadDotEnv();
 export const config = {
   port: Number(process.env.PORT ?? 3001),
 
+  /**
+   * Network interface to bind. Defaults to `0.0.0.0` (every interface) so the
+   * server is reachable from other machines on the network — and, inside a
+   * container, from outside the container at all — without any configuration.
+   * Set `HOST=127.0.0.1` to restrict it to the local machine.
+   */
+  host: process.env.HOST ?? '0.0.0.0',
+
   /** Root of the markdown space. This directory is the whole database. */
   spaceDir: resolve(ROOT, process.env.SPARK_SPACE ?? 'space'),
 
@@ -89,6 +97,24 @@ export const config = {
   },
 
   /**
+   * Spark's own defaults, for the same reason the AI ones are here: a container
+   * can be handed a name and a search key at boot without anyone opening the
+   * settings page. Whatever is saved from Settings wins — read through
+   * `spark-settings.ts`, never directly.
+   */
+  spark: {
+    userName: process.env.SPARK_USER_NAME ?? '',
+    instructions: process.env.SPARK_INSTRUCTIONS ?? '',
+    /**
+     * Seeds the default web-search engine (Exa). Every other engine's key lives
+     * only in the settings file; the env var exists for the container that
+     * should work before anyone opens Settings. Empty means Exa is not ready
+     * until a key is added there.
+     */
+    exaKey: process.env.EXA_API_KEY ?? '',
+  },
+
+  /**
    * The code sandbox.
    *
    * Off unless a runtime is named, and named here rather than in the settings
@@ -99,11 +125,30 @@ export const config = {
    * actually isolates.
    */
   sandbox: {
-    /** `off` | `docker` | `node` | `python` | a command of your own. */
-    runtime: process.env.SPARK_SANDBOX ?? 'off',
+    /**
+     * `auto` | `off` | `docker` | `node` | `python` | a command of your own.
+     *
+     * `auto` is the default and resolves at boot: Docker when the daemon
+     * answers, and a local subprocess otherwise. It is a default rather than a
+     * refusal because the *second* gate is still shut — `sparkCanRun` is off
+     * until someone turns it on — and an agent that cannot add a column up is
+     * worse at the job than one whose arithmetic runs in a container.
+     */
+    runtime: process.env.SPARK_SANDBOX ?? 'auto',
     /** Docker image. Empty means a small official one per language. */
     image: process.env.SPARK_SANDBOX_IMAGE ?? '',
     timeoutMs: Number(process.env.SPARK_SANDBOX_TIMEOUT ?? 20_000),
+    /**
+     * The agent's own directory, which survives between runs.
+     *
+     * Outside the space, because scratch work is not notes: a half-finished CSV
+     * and three attempts at a chart do not belong in the page list, in search or
+     * in git. It is the working directory of every `run_code` call, so a script
+     * can leave something behind for the next one to pick up.
+     */
+    workDir: resolve(ROOT, process.env.SPARK_SANDBOX_WORKDIR ?? '.spark/workspace'),
+    /** Whether a run gets the persistent directory or a fresh temporary one. */
+    persist: process.env.SPARK_SANDBOX_PERSIST !== 'false',
   },
 
   /**

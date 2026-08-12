@@ -79,6 +79,42 @@ const markdownPlugin = definePlugin({
       category: 'Format',
       run: () => spark.editor.toggleWrap('=='),
     });
+
+    // Outline moves (Mod-Alt-arrows in the editor). The command exists because
+    // a trackpad has no Alt-arrow; toast when there is nothing to move, since
+    // a silent no-op pings as broken.
+    spark.commands.register({
+      id: 'markdown.moveUp',
+      name: 'Move item up',
+      category: 'Format',
+      run: () => {
+        if (!spark.editor.moveItem(-1)) spark.ui.toast('Nothing to move', 'error');
+      },
+    });
+    spark.commands.register({
+      id: 'markdown.moveDown',
+      name: 'Move item down',
+      category: 'Format',
+      run: () => {
+        if (!spark.editor.moveItem(1)) spark.ui.toast('Nothing to move', 'error');
+      },
+    });
+    spark.commands.register({
+      id: 'markdown.indent',
+      name: 'Indent item',
+      category: 'Format',
+      run: () => {
+        if (!spark.editor.indentItem(false)) spark.ui.toast('Nothing to indent', 'error');
+      },
+    });
+    spark.commands.register({
+      id: 'markdown.outdent',
+      name: 'Outdent item',
+      category: 'Format',
+      run: () => {
+        if (!spark.editor.indentItem(true)) spark.ui.toast('Nothing to outdent', 'error');
+      },
+    });
   },
 });
 

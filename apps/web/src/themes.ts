@@ -34,10 +34,18 @@ import {
  *   Omitting them falls through to `tokens.css`, which already has a set drawn
  *   for the scheme in play. Restating them in every theme would be twelve copies
  *   of a decision made once.
- * - **The Spark theme's own palette.** It has none: the app's palette lives in
- *   `tokens.css`, because that is what has to be right before any plugin has
- *   loaded, and a second copy here would be a second thing to keep true. The
- *   Spark theme is the app as it ships, plus the font pairing it ships with.
+ *
+ * ## Spark restates `tokens.css`'s defaults
+ *
+ * The app's palette still *lives* in `tokens.css` — that is what has to be
+ * right before any plugin has loaded, and applying the Spark theme writes no
+ * override, so `tokens.css` decides exactly as it always did. But the same ten
+ * decision colours every other theme states are restated here too, because
+ * `previewCss` in `lib/theme.ts` scopes a theme's own tokens to its gallery
+ * card, and a theme with none inherits whatever theme is actually active
+ * instead — the one card out of thirteen that showed the wrong palette. Keep
+ * these in sync with `tokens.css`'s `:root` and `@media (prefers-color-scheme:
+ * dark)` blocks by hand; nothing checks that they match.
  */
 
 /** The colours a theme actually decides. Everything else follows from these. */
@@ -172,13 +180,42 @@ function theme(
 }
 
 const BUILT_IN: ThemeDefinition[] = [
-  {
-    id: 'spark',
-    name: 'Spark',
-    description: 'The palette the app ships with — warm paper, one quiet blue.',
-    author: 'Spark',
-    fontPack: 'spark',
-  },
+  theme(
+    'spark',
+    'Spark',
+    'The palette the app ships with — warm paper, one quiet blue.',
+    'spark',
+    {
+      bg: '#fbfbfa',
+      surface: '#ffffff',
+      raised: '#ffffff',
+      sunken: '#f2f2ef',
+      text: '#1f1f1d',
+      accent: '#2f6df0',
+      accentContrast: '#ffffff',
+      tag: '#a4622a',
+      highlight: '#fdf0b8',
+      shadow: '20 20 18',
+      // Matches `tokens.css`'s own defaults, restated only so the gallery card
+      // has something of its own to preview — see "The default palette is not
+      // in a theme" in AGENTS.md. The app itself never reads this: applying
+      // Spark writes no override, and `tokens.css` decides as it always did.
+      extra: { 'radius-sm': '6px', radius: '10px', 'radius-lg': '16px' },
+    },
+    {
+      bg: '#17171a',
+      surface: '#1d1d21',
+      raised: '#24242a',
+      sunken: '#131316',
+      text: '#e8e8e4',
+      accent: '#6f9bff',
+      accentContrast: '#11131a',
+      tag: '#d99b63',
+      highlight: '#5a4f22',
+      shadow: '0 0 0',
+      extra: { 'radius-sm': '6px', radius: '10px', 'radius-lg': '16px' },
+    },
+  ),
 
   theme(
     'paper',
